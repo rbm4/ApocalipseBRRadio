@@ -49,6 +49,35 @@ into ordinary files through the exposed API. Chunks let them join at the next
 boundary. The music-pack importer generates audio chunks and sound registrations.
 Ordinary file playback is approximate synchronization, not streamed audio.
 
+## Receiver audio
+
+Each client owns one local music emitter per receiving radio, not per listener.
+The client uses `playSoundImpl(sound, false, nil)`; `playSound` would send a
+native sound packet and duplicate playback on other clients that already render
+the same broadcast. Server sequence/position heartbeats select the same chunks
+on all clients. Repeated callbacks for the same receiver do not restart audio.
+
+Speaker playback is 3D: placed radios emit from their tile center, equipped
+portable radios follow their owner, and vehicle radios follow their vehicle.
+FMOD handles direction, distance attenuation, and occlusion. Gain uses the
+receiver's `getDeviceVolume()` directly, without a second Lua distance fade.
+Headphones remain owner-only, non-spatial playback.
+
+Content sound definitions must use `is3D = true` and explicit clip attenuation
+distances (the importer supplies `distanceMin = 1`, `distanceMax = 20`). Older
+generated definitions using `is3D = false` need updating for native attenuation
+and occlusion. The sound script defines FMOD's attenuation curve; the receiver's
+native sound-volume range separately bounds playback eligibility, and changes
+with receiver type, location, and volume. It is not a per-emitter FMOD distance
+override. Walking beyond that range releases the local emitter; returning joins
+at the next chunk boundary.
+
+Power off, mute, retuning, recorded-media playback, blocked reception,
+unequipping/transferring a portable radio, picking up/removing a placed radio,
+uninstalling/removing a vehicle radio, song end, and missing heartbeats stop and
+release the owned emitter. Losing heartbeats uses the existing eight-second
+timeout. Native static/VOIP emitters remain owned by the game.
+
 ## Channel ownership
 
 `ABRRadioServer.tryAcquireChannel(channelId, owner)` acquires an enabled idle

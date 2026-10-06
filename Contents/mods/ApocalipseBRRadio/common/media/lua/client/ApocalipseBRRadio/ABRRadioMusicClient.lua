@@ -17,10 +17,22 @@ end
 local function position(device)
     if device.getPlayer then
         local owner = device:getPlayer()
-        if not owner or owner:getEquipedRadio() ~= device then return nil end
+        if not owner or owner:isDead() or owner:getEquipedRadio() ~= device then return nil end
         return owner:getX(), owner:getY(), owner:getZ(), owner
     end
-    return device:getX(), device:getY(), device:getZ(), nil
+    if device.getVehicle then
+        local vehicle = device:getVehicle()
+        if not vehicle or vehicle:isRemovedFromWorld() or not vehicle:getSquare()
+            or not device:getInventoryItem() then return nil end
+        return vehicle:getX(), vehicle:getY(), vehicle:getZ(), nil
+    end
+    -- Picking up/unloading a placed receiver invalidates the old world object.
+    if not device:getSquare() or device:getObjectIndex() < 0 then return nil end
+    return device:getX() + 0.5, device:getY() + 0.5, device:getZ(), nil
+end
+
+local function headphones(device, data)
+    return device.getPlayer and data:getHeadphoneType() >= 0
 end
 
 local function audible(device, data)
@@ -34,8 +46,8 @@ local function audible(device, data)
         if player and not player:isDead() and not player:hasTrait(CharacterTrait.DEAF) then
             if owner and data:getHeadphoneType() >= 0 then
                 if player == owner then return true end
-            elseif math.abs(player:getZ() - z) < 1
-                and (player:getX() - x)^2 + (player:getY() - y)^2 <= range^2 then
+            elseif (player:getX() - x)^2 + (player:getY() - y)^2
+                + ((player:getZ() - z) * 3)^2 <= range^2 then
                 return true
             end
         end
@@ -56,7 +68,7 @@ local function onDeviceText(guid, codes, x, y, z, text, device)
     if state and sequence == state.sequence and (state.entry.id ~= id or elapsed < state.lastPosition) then return end
     if not state or state.sequence ~= sequence then
         if state then stop(state) end
-        state = { entry = entry, sequence = sequence, chunk = 0, textIndex = 0 }
+        state = { entry = entry, sequence = sequence, data = data, chunk = 0, textIndex = 0 }
         C.devices[device] = state
     end
     -- Heartbeats refresh position without restarting music or repeating lyrics.
@@ -104,23 +116,11 @@ local function play(device, state, elapsed)
         getWorld():takeOwnershipOfEmitter(state.emitter)
     end
     local sound = entry.chunks and entry.chunks[index].sound or entry.sound
-    state.handle = state.emitter:playSound(sound)
-    state.emitter:set3D(state.handle, false) -- distance/volume controlled below
-end
-
-local function volume(device, data)
-    local x, y, z, owner = position(device)
-    if owner and data:getHeadphoneType() >= 0 then return data:getDeviceVolume() end
-    local range, gain = data:getDeviceSoundVolumeRange(), 0
-    for i = 0, getNumActivePlayers() - 1 do
-        local player = getSpecificPlayer(i)
-        if player and not player:isDead() and not player:hasTrait(CharacterTrait.DEAF)
-            and math.abs(player:getZ() - z) < 1 then
-            local distance = math.sqrt((player:getX() - x)^2 + (player:getY() - y)^2)
-            gain = math.max(gain, math.max(0, 1 - distance / range))
-        end
-    end
-    return data:getDeviceVolume() * gain
+    -- The three-argument local overload avoids the nullable overload ambiguity
+    -- and, crucially, never sends PlayWorldSound to other clients. Each client
+    -- renders one copy per receiver from the same authority's song/chunk clock.
+    state.handle = state.emitter:playSoundImpl(sound, false, nil)
+    state.emitter:set3D(state.handle, not headphones(device, state.data))
 end
 
 local function tick()
@@ -129,7 +129,7 @@ local function tick()
         local data = device:getDeviceData()
         local age = C.clock - state.receivedAt
         local elapsed = state.elapsed + age
-        if not data or age > M.TIMEOUT or elapsed >= state.entry.duration
+        if not data or data ~= state.data or age > M.TIMEOUT or elapsed >= state.entry.duration
             or data:getChannel() ~= M.stations[state.entry.station].frequency
             or not audible(device, data) then
             stop(state)
@@ -140,7 +140,12 @@ local function tick()
             if state.emitter then
                 local x, y, z = position(device)
                 state.emitter:setPos(x, y, z)
-                if state.handle then state.emitter:setVolume(state.handle, volume(device, data)) end
+                if state.handle then
+                    state.emitter:set3D(state.handle, not headphones(device, data))
+                    -- FMOD owns spatial attenuation/panning/occlusion; applying
+                    -- another distance gain here would attenuate music twice.
+                    state.emitter:setVolume(state.handle, data:getDeviceVolume())
+                end
                 state.emitter:tick()
             end
         end

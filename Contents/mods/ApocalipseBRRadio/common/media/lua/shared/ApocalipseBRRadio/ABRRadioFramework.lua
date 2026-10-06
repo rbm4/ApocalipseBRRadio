@@ -10,7 +10,7 @@
         -- Register a channel
         ABRRadio.registerChannel({
             id = "my_channel",
-            name = { EN = "My Channel", PTBR = "Meu Canal" },
+            name = { translationId = "Name" },
             frequency = 95000,
             category = "Radio",
             color = { r = 0.0, g = 0.8, b = 0.0 },
@@ -22,24 +22,22 @@
         ABRRadio.registerTransmission("my_channel", {
             id = "tx_greeting",
             lines = {
-                { EN = "Hello survivors!", PTBR = "Ola sobreviventes!" },
-                { EN = "Stay safe.", PTBR = "Fiquem seguros." },
+                { translationId = true },
+                { translationId = true },
                 "<bzzt>",
             },
             weight = 10,
         })
 
         -- Trigger an immediate one-shot transmission (for events)
-        ABRRadio.triggerImmediate("my_channel", {
-            { EN = "Breaking news!", PTBR = "Noticia urgente!" },
-        })
+        ABRRadio.triggerImmediate("my_channel", { "<bzzt>" })
 
     TRANSLATION:
         - The broadcast language is set by the server admin via sandbox option
           SandboxVars.ApocalipseBRRadio.Language (1 = English, 2 = Portugues BR)
-        - Lines can be: tables with language keys, or plain strings for static sounds
+        - Registered text lines use translationId markers; static sounds remain strings
         - Static sounds (<bzzt>, <fzzt>, <wzzt>, <szzt>) pass through as-is
-        - Fallback order: selected language -> EN -> first available -> raw key
+        - Translation keys use the sandbox language suffix and fall back to EN
         - Signal strength -1 means infinite range (reaches all players)
         - Channels can be tied to sandbox options for easy toggling
 ]]
@@ -89,6 +87,24 @@ function ABRRadio.getLanguage()
 end
 
 
+--- Resolve a registration-time radio label from the Translate/RadioData catalog.
+--- Language suffixes let the sandbox setting select text independently of the
+--- server process's own game language.
+function ABRRadio.resolveRegisteredLabel(keyBase)
+    local language = ABRRadio.getLanguage()
+    local key = keyBase .. "_" .. language
+    local text = getText and getText(key) or key
+    if text == key and language ~= ABRRadio.DEFAULT_LANG then
+        local fallbackKey = keyBase .. "_" .. ABRRadio.DEFAULT_LANG
+        text = getText and getText(fallbackKey) or fallbackKey
+    end
+    if text == key or text == keyBase .. "_" .. ABRRadio.DEFAULT_LANG then
+        print("[ABRRadio] WARNING: Missing radio translation: " .. key)
+    end
+    return text
+end
+
+
 --- Get the ZomboidRadio singleton instance.
 --- @return userdata|nil ZomboidRadio instance
 function ABRRadio.getRadio()
@@ -105,8 +121,8 @@ end
 --- Register a custom radio channel.
 --- @param config table Channel configuration:
 ---   id             (string)  [REQUIRED] Unique channel identifier
----   name           (table|string)  Display name: { EN = "...", PTBR = "..." } or plain string
----   description    (table|string)  Channel description: { EN = "...", PTBR = "..." } or plain string
+---   name           (table|string)  Display name; translationId tables use RadioData keys
+---   description    (table|string)  Description; translationId tables use RadioData keys
 ---   frequency      (number)  Broadcast frequency (e.g. 91600 = 91.6 MHz)
 ---   category       (string)  "Radio"|"Emergency"|"Military"|"Amateur"|"Other"|"Television"|"Bandit"
 ---   color          (table)   Default line color { r, g, b } in 0.0-1.0 range
@@ -125,6 +141,13 @@ function ABRRadio.registerChannel(config)
 
     if ABRRadio.channels[config.id] then
         print("[ABRRadio] WARNING: Overwriting channel '" .. config.id .. "'")
+    end
+
+    if type(config.name) == "table" and config.name.translationId then
+        config.name = ABRRadio.resolveRegisteredLabel("RD_ABR_Channel_" .. config.id .. "_" .. config.name.translationId)
+    end
+    if type(config.description) == "table" and config.description.translationId then
+        config.description = ABRRadio.resolveRegisteredLabel("RD_ABR_Channel_" .. config.id .. "_" .. config.description.translationId)
     end
 
     ABRRadio.channels[config.id] = {
@@ -181,9 +204,39 @@ function ABRRadio.registerTransmission(channelId, tx)
         ABRRadio.transmissions[channelId] = {}
     end
 
+    local transmissionId = tx.id or (channelId .. "_tx_" .. (#ABRRadio.transmissions[channelId] + 1))
+
+    -- Resolve registered translation IDs once, using the server's shared
+    -- sandbox language. Each client receives the same resolved radio line.
+    local lines = {}
+    local language = ABRRadio.getLanguage()
+    for lineNumber, line in ipairs(tx.lines or {}) do
+        if type(line) == "table" and (line.translationId or line.translationKey) then
+            local keyBase = "RD_ABR_" .. channelId .. "_" .. transmissionId .. "_Line" .. string.format("%02d", lineNumber) .. "_"
+            local key
+            if line.translationKey then
+                key = line.translationKey .. "_" .. language
+            else
+                key = keyBase .. language
+            end
+            local args = line.args or {}
+            local text = getText and getText(key, unpack(args)) or key
+            local fallbackKey = (line.translationKey or keyBase) .. "_" .. ABRRadio.DEFAULT_LANG
+            if text == key and language ~= ABRRadio.DEFAULT_LANG then
+                text = getText and getText(fallbackKey, unpack(args)) or fallbackKey
+            end
+            if text == key or text == fallbackKey then
+                print("[ABRRadio] WARNING: Missing radio translation: " .. key)
+            end
+            table.insert(lines, text)
+        else
+            table.insert(lines, line)
+        end
+    end
+
     local transmission = {
-        id          = tx.id or (channelId .. "_tx_" .. (#ABRRadio.transmissions[channelId] + 1)),
-        lines       = tx.lines or {},
+        id          = transmissionId,
+        lines       = lines,
         color       = tx.color or nil,
         codes       = tx.codes or "",
         weight      = tx.weight or 10,
