@@ -1,0 +1,76 @@
+version=1
+id=3706460551
+title=ApocalipseBRRadio
+description=[h1]APOCALIPSE [BR] - Radio Framework[/h1]
+description=Brings the dead airwaves back to life. Six unique radio channels with immersive, lore-rich transmissions — emergency alerts, survivor stories, military chatter, paranormal whispers, cryptic numbers, and a mysterious archivist who monitors them all.
+description=
+description=Supports English and Brazilian Portuguese. Fully configurable via sandbox options. Other modders can use this framework to add their own channels.
+description=
+description=[hr][/hr]
+description=
+description=[h1]Channels[/h1]
+description=[list]
+description=[*] [b]Emergency Broadcast System (91.6 MHz)[/b] — Evacuation orders and survival directives from what remains of Central Command.
+description=[*] [b]Ghost Radio (66.6 MHz)[/b] — Unsettling whispers and cryptic warnings from a frequency no one claims to operate.
+description=[*] [b]Radio Apocalipse (104.2 MHz)[/b] — The voice of the survivors. Horde warnings, supply drops, and words of hope.
+description=[*] [b]Military Communications (310 kHz)[/b] — Intercepted tactical operations from soldiers fighting a war they've already lost.
+description=[*] [b]Numbers Station (47.8 MHz)[/b] — Enigmatic number sequences. Its purpose is unknown. Its origin is untraceable.
+description=[*] [b]The Alexandria Library (100.0 MHz)[/b] — A solitary archivist monitors every frequency. No one knows where she transmits from.
+description=[/list]
+description=
+description=[hr][/hr]
+description=
+description=[h1]Sandbox Options[/h1]
+description=Found under [b]ApocalipseBRRadio[/b] in Sandbox Settings:
+description=[list]
+description=[*] [b]Language[/b] — English or Portugues BR
+description=[*] [b]Keep Radio Alive[/b] — prevents radios from going silent after vanilla broadcasts end
+description=[*] [b]Transmission Interval[/b] — minutes between broadcasts (1-60)
+description=[*] [b]Toggle each channel[/b] — enable/disable any channel individually
+description=[/list]
+description=
+description=[hr][/hr]
+description=
+description=[h1]For Modders[/h1]
+description=Add your own channels from your mod — no need to edit this mod's files.
+description=
+description=[b]1.[/b] Add [code]require=apocalipsebrradio[/code] to your mod.info
+description=[b]2.[/b] Create a Lua file under media/lua/shared/ and require the framework:
+description=[code]require "ApocalipseBRRadio/ABRRadioFramework"[/code]
+description=
+description=[b]3.[/b] Register a channel and add transmissions:
+description=[code]
+description=ABRRadio.registerChannel({
+description=    id = "my_channel",
+description=    name = { EN = "My Channel", PTBR = "Meu Canal" },
+description=    frequency = 95000,
+description=    category = "Radio",
+description=    color = { r = 0.0, g = 0.8, b = 1.0 },
+description=})
+description=
+description=ABRRadio.registerTransmission("my_channel", {
+description=    id = "my_tx_01",
+description=    lines = {
+description=        "<bzzt>",
+description=        { EN = "Hello survivors!", PTBR = "Ola sobreviventes!" },
+description=        "<fzzt>",
+description=    },
+description=    weight = 10,
+description=})
+description=[/code]
+description=
+description=Full API docs and examples in the source code comments.
+description=
+description=[hr][/hr]
+description=
+description=[h1]Compatibility[/h1]
+description=[list]
+description=[*] Requires Project Zomboid Build 42+
+description=[*] Multiplayer and singleplayer
+description=[*] Safe to add to existing saves
+description=[/list]
+description=
+description=[hr][/hr]
+description=Created by [b]Hypothetic[/b] — [url=https://apocalipse.cloud]apocalipse.cloud[/url]
+tags=Build 42
+visibility=unlisted
