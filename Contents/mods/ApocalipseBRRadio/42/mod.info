@@ -1,0 +1,7 @@
+name=APOCALIPSE BR - Radio Framework
+id=apocalipsebrradio
+description=Radio framework with custom transmissions, music playback, timed local lyrics, and exclusive channel scheduling.
+poster=poster.png
+url=https://apocalipse.cloud
+author=Hypothetic
+versionMin=42.0.0

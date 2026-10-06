@@ -192,7 +192,7 @@ end
 
 
 --- Process the immediate broadcast queue.
---- Immediate transmissions interrupt any current transmission on the channel.
+--- Immediate text waits behind real-time segments; deferred text drains in order.
 local function processImmediateQueue()
     local deferred, started = {}, {}
     for _, item in ipairs(ABRRadio.immediateQueue) do
@@ -205,20 +205,20 @@ local function processImmediateQueue()
                 item.deferredByMusic = true
                 table.insert(deferred, item)
             else
-            ABRRadioServer.activeTransmissions[item.channelId] = {
-                transmission = {
-                    lines = item.lines,
-                    color = item.color,
-                    codes = "",
-                    command = item.command or nil,
-                    commandArgs = item.commandArgs or nil,
-                },
-                currentLineIndex = 0,
-                lastSentText = nil,
-            }
-            ABRRadioServer.listeners[item.channelId] = {}
-            started[item.channelId] = true
-            print("[ABRRadio Server] Immediate transmission queued on: " .. ABRRadio.resolveChannelName(channel))
+                ABRRadioServer.activeTransmissions[item.channelId] = {
+                    transmission = {
+                        lines = item.lines,
+                        color = item.color,
+                        codes = "",
+                        command = item.command or nil,
+                        commandArgs = item.commandArgs or nil,
+                    },
+                    currentLineIndex = 0,
+                    lastSentText = nil,
+                }
+                ABRRadioServer.listeners[item.channelId] = {}
+                started[item.channelId] = true
+                print("[ABRRadio Server] Immediate transmission queued on: " .. ABRRadio.resolveChannelName(channel))
             end
         end
     end

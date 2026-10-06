@@ -1,5 +1,5 @@
 --[[
-    APOCALIPSE [BR] - Radio Framework v2.0.0
+    APOCALIPSE [BR] - Radio Framework v2.1.0
     Core API for custom radio channel and transmission management.
 
     This framework provides a simple, data-driven API to register custom radio
@@ -199,7 +199,7 @@ end
 
 
 --- Queue an immediate one-shot transmission on a channel.
---- This interrupts any current transmission and broadcasts immediately.
+--- Interrupts ordinary text, but waits behind music or timed music talk.
 --- Useful for event-triggered broadcasts.
 --- @param channelId string Channel to broadcast on
 --- @param lines table Array of line strings/tables
