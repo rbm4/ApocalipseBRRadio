@@ -1,5 +1,5 @@
 --[[
-    APOCALIPSE [BR] - Radio Framework v2.1.0
+    APOCALIPSE [BR] - Radio Framework v2.3.0
     Core API for custom radio channel and transmission management.
 
     This framework provides a simple, data-driven API to register custom radio
@@ -44,7 +44,7 @@
 
 ABRRadio = ABRRadio or {}
 
-ABRRadio.VERSION = "2.1.0"
+ABRRadio.VERSION = "2.3.0"
 
 -- Module name for sendServerCommand / sendClientCommand networking
 ABRRadio.NET_MODULE = "ABRRadio"
@@ -52,6 +52,14 @@ ABRRadio.NET_MODULE = "ABRRadio"
 -- Supported language codes mapped from sandbox integer values
 ABRRadio.LANGUAGES = { [1] = "EN", [2] = "PTBR" }
 ABRRadio.DEFAULT_LANG = "EN"
+
+-- Dedicated servers load Translator before activating mods. Refresh once after
+-- mod activation, before resolving any registration-time labels from their JSON.
+if isServer and isServer() and Translator and Translator.loadFiles
+    and not ABRRadio.translationsLoaded then
+    Translator.loadFiles()
+    ABRRadio.translationsLoaded = true
+end
 
 -- Channel registry: channelId -> channel config
 ABRRadio.channels = {}
@@ -90,13 +98,14 @@ end
 --- Resolve a registration-time radio label from the Translate/RadioData catalog.
 --- Language suffixes let the sandbox setting select text independently of the
 --- server process's own game language.
-function ABRRadio.resolveRegisteredLabel(keyBase)
+function ABRRadio.resolveRegisteredLabel(keyBase, args)
+    args = args or {}
     local language = ABRRadio.getLanguage()
     local key = keyBase .. "_" .. language
-    local text = getText and getText(key) or key
+    local text = getText and getText(key, unpack(args)) or key
     if text == key and language ~= ABRRadio.DEFAULT_LANG then
         local fallbackKey = keyBase .. "_" .. ABRRadio.DEFAULT_LANG
-        text = getText and getText(fallbackKey) or fallbackKey
+        text = getText and getText(fallbackKey, unpack(args)) or fallbackKey
     end
     if text == key or text == keyBase .. "_" .. ABRRadio.DEFAULT_LANG then
         print("[ABRRadio] WARNING: Missing radio translation: " .. key)
@@ -209,25 +218,11 @@ function ABRRadio.registerTransmission(channelId, tx)
     -- Resolve registered translation IDs once, using the server's shared
     -- sandbox language. Each client receives the same resolved radio line.
     local lines = {}
-    local language = ABRRadio.getLanguage()
     for lineNumber, line in ipairs(tx.lines or {}) do
         if type(line) == "table" and (line.translationId or line.translationKey) then
-            local keyBase = "RD_ABR_" .. channelId .. "_" .. transmissionId .. "_Line" .. string.format("%02d", lineNumber) .. "_"
-            local key
-            if line.translationKey then
-                key = line.translationKey .. "_" .. language
-            else
-                key = keyBase .. language
-            end
-            local args = line.args or {}
-            local text = getText and getText(key, unpack(args)) or key
-            local fallbackKey = (line.translationKey or keyBase) .. "_" .. ABRRadio.DEFAULT_LANG
-            if text == key and language ~= ABRRadio.DEFAULT_LANG then
-                text = getText and getText(fallbackKey, unpack(args)) or fallbackKey
-            end
-            if text == key or text == fallbackKey then
-                print("[ABRRadio] WARNING: Missing radio translation: " .. key)
-            end
+            local keyBase = line.translationKey or ("RD_ABR_" .. channelId .. "_" .. transmissionId
+                .. "_Line" .. string.format("%02d", lineNumber))
+            local text = ABRRadio.resolveRegisteredLabel(keyBase, line.args)
             table.insert(lines, text)
         else
             table.insert(lines, line)

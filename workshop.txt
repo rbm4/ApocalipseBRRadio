@@ -1,6 +1,6 @@
 version=1
 id=3706460551
-title=ApocalipseBRRadio
+title=ApocalipseBR Radio Framework
 description=[h1]APOCALIPSE [BR] - Radio Framework[/h1]
 description=Brings the dead airwaves back to life. Six unique radio channels with immersive, lore-rich transmissions — emergency alerts, survivor stories, military chatter, paranormal whispers, cryptic numbers, and a mysterious archivist who monitors them all.
 description=
@@ -72,5 +72,5 @@ description=[/list]
 description=
 description=[hr][/hr]
 description=Created by [b]Hypothetic[/b] — [url=https://apocalipse.cloud]apocalipse.cloud[/url]
-tags=Build 42
-visibility=unlisted
+tags=Build 42;Audio;Framework;Misc;Multiplayer;Pop Culture;Silly/Fun
+visibility=public

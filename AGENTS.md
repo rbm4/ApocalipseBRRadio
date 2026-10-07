@@ -77,6 +77,12 @@ catalog and Numbers Station templates.
 
 ## Radio label lookup and sandbox language
 
+Dedicated-server startup loads `Translator` before activating mods. The shared
+framework calls `Translator.loadFiles()` once when first loaded on the server,
+before resolving catalog labels, so the active mod JSON dictionaries are present.
+`node tests/translations_spec.js` (with Fengari available) simulates this startup
+and validates both catalogs, channel ownership, placeholders, and EN fallback.
+
 `ABRRadio.getLanguage()` maps `SandboxVars.ApocalipseBRRadio.Language` through
 `ABRRadio.LANGUAGES` (`1 = EN`, `2 = PTBR`). `registerChannel` resolves channel
 name/description keys, and `registerTransmission` resolves marked lines during
@@ -123,8 +129,8 @@ ownership; see `MUSIC.md` before changing that contract.
 ## Music content is a separate API
 
 Music stations, songs, and timed talk use `ABRRadio.registerMusicStation`,
-`registerSong`, and `registerMusicTalk`. Their captions/lyrics are resolved by
-the music client from the registered content and `ABRRadio.resolveText`; they do
+`registerSong`, and `registerMusicTalk`. Song title/artist announcements and timed
+talk lines use `ABRRadio.resolveText`; song lyrics are not supported. These do
 not pass through `registerTransmission`'s `RadioData` key construction. Follow
 `MUSIC.md` and the current music content schema when editing that subsystem.
 

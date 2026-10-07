@@ -174,7 +174,7 @@ require "ApocalipseBRRadio/ABRTransmissions_OccultSociety"
 print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("emergency_broadcast") .. " emergency transmissions.")
 print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("ghost_radio") .. " ghost radio transmissions.")
 print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("radio_apocalipse") .. " survivor transmissions.")
-print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("occ_radio") .. " survivor transmissions.")
+print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("occ_apocalipse") .. " survivor transmissions.")
 print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("military_comms") .. " military transmissions.")
 print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("numbers_station") .. " numbers station transmissions.")
 print("[ABRRadio] Registered " .. ABRRadio.getTransmissionCount("alexandria_library") ..

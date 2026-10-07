@@ -4,12 +4,27 @@ require "ApocalipseBRRadio/ABRRadioFramework"
 -- never array indices: adding a pack must not change another pack's wire IDs.
 ABRRadio.music = ABRRadio.music or { stations = {}, content = {} }
 local M = ABRRadio.music
+M.stationIds = M.stationIds or {}
 -- Compatibility for previously generated catalog modules; new packs use ABRRadio.
 ApocalipseMusic = M
-M.PREFIX = "AMP1|"
-M.HEARTBEAT = 2
+M.PREFIX = "AMP2|"
+M.SCAN_WAIT_TICKS = 50
+M.TARGET_TICKS_PER_SECOND = 10
+M.HEARTBEAT = 5
 M.TIMEOUT = 8
-M.DEFAULT_LYRIC_DURATION = 4
+M.MUSIC_NOTE = "[img=music]"
+M.ANNOUNCEMENT_DURATION = 3
+M.FADE_DURATION = 2
+M.PLAY_RETRY = 2
+M.INTERMISSION_MIN = 0
+M.INTERMISSION_MAX = 5
+
+-- Allow three complete scans before expiring a receiver. The scan length grows
+-- with station count because the authority processes only one station per tick.
+function M.getHeartbeatTimeout()
+    local scanSeconds = (M.SCAN_WAIT_TICKS + #M.stationIds) / M.TARGET_TICKS_PER_SECOND
+    return math.max(M.TIMEOUT, scanSeconds * 3)
+end
 
 local function validId(id)
     return type(id) == "string" and #id > 0 and #id <= 24
@@ -30,6 +45,7 @@ function M.registerStation(config)
     assert(ABRRadio.registerChannel(config), "Radio registration failed")
     config.songs, config.talks = {}, {}
     M.stations[config.id] = config
+    table.insert(M.stationIds, config.id)
 end
 
 local function register(config, kind)
@@ -40,7 +56,7 @@ local function register(config, kind)
     config.weight = config.weight or 10
     assert(config.weight > 0 and config.weight == math.floor(config.weight), "Weight must be a positive integer")
     local previous = -1
-    for _, line in ipairs(config.lyrics or config.lines or {}) do
+    for _, line in ipairs(kind == "talk" and (config.lines or {}) or {}) do
         assert(type(line.at) == "number" and line.at >= 0 and line.at < config.duration
             and line.at > previous, "Text timestamps must increase and fall within duration")
         assert(line.text, "Timed text requires text")
@@ -50,9 +66,8 @@ local function register(config, kind)
         previous = line.at
     end
     if kind == "song" then
-        config.lyricDuration = config.lyricDuration or M.DEFAULT_LYRIC_DURATION
-        assert(type(config.lyricDuration) == "number" and config.lyricDuration > 0,
-            "Default lyric display duration must be positive seconds")
+        -- Discard obsolete song text fields from existing content packs.
+        config.lyrics, config.lyricDuration, config.lines = nil, nil, nil
         if config.chunks and #config.chunks == 0 then config.chunks = nil end
         assert(type(config.sound) == "string" or #(config.chunks or {}) > 0, "Song needs sound or chunks")
         previous = -1
@@ -86,29 +101,33 @@ function M.pick(pool, previousId)
     end
 end
 
--- Position implies lyric index and audio chunk; neither text nor paths go on wire.
-function M.encode(id, sequence, elapsed)
-    return M.PREFIX .. id .. "|" .. string.format("%.0f", sequence) .. "|" .. math.floor(elapsed * 10)
+-- Receivers only need the active content, cycle, and lifecycle phase.
+function M.encode(id, sequence, phase)
+    return M.PREFIX .. id .. "|" .. string.format("%.0f", sequence) .. "|" .. (phase or "play")
 end
 
 function M.decode(codes)
     if type(codes) ~= "string" or #codes > 100 then return nil end
-    local id, sequence, position = codes:match("^AMP1|([%w_%-]+)|(%d+)|(%d+)$")
-    if not id then return nil end
-    return id, tonumber(sequence), tonumber(position) / 10
+    local id, sequence, phase = codes:match("^AMP2|([%w_%-]+)|(%d+)|(%a+)$")
+    if phase ~= "announce" and phase ~= "play" and phase ~= "end" then return nil end
+    if not id or not validId(id) then return nil end
+    return id, tonumber(sequence), phase
 end
 
-function M.textIndex(entry, elapsed)
-    local lines = entry.lyrics or entry.lines or {}
+function M.caption(entry)
+    local title = ABRRadio.resolveText(entry.title)
+    local artist = ABRRadio.resolveText(entry.artist)
+    if title == "" then return artist end
+    return title .. (artist ~= "" and (" - " .. artist) or "")
+end
+
+function M.talkLineIndex(entry, elapsed)
+    local lines = entry.lines or {}
     for i = #lines, 1, -1 do
         local line = lines[i]
         if elapsed >= line.at then
-            -- Sparse song cues expire even without an explicit end. Talk lines
-            -- retain their separate until-next-line behavior. No blank cues are
-            -- needed to keep playback commands flowing through instrumental gaps.
             local nextAt = (lines[i + 1] and lines[i + 1].at) or entry.duration
-            local ending = line.untilTime or (entry.kind == "song"
-                and (line.at + (entry.lyricDuration or M.DEFAULT_LYRIC_DURATION))) or nextAt
+            local ending = line.untilTime or nextAt
             ending = math.min(ending, nextAt, entry.duration)
             if elapsed < ending then return i end
             return 0

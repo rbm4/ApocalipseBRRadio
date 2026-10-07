@@ -1,4 +1,4 @@
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_01",
     lines = {
         { translationId = true },
@@ -12,7 +12,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 0,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_02",
     lines = {
         { translationId = true },
@@ -26,7 +26,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 2,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_03",
     lines = {
         { translationId = true },
@@ -41,7 +41,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 4,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_04",
     lines = {
         { translationId = true },
@@ -55,7 +55,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 6,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_05",
     lines = {
         { translationId = true },
@@ -70,7 +70,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 7,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_06",
     lines = {
         { translationId = true },
@@ -84,7 +84,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 9,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_07",
     lines = {
         { translationId = true },
@@ -99,7 +99,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 11,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_08",
     lines = {
         { translationId = true },
@@ -113,7 +113,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 13,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_09",
     lines = {
         { translationId = true },
@@ -128,7 +128,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 15,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_10",
     lines = {
         { translationId = true },
@@ -142,7 +142,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 17,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_11",
     lines = {
         { translationId = true },
@@ -157,7 +157,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 19,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_12",
     lines = {
         { translationId = true },
@@ -172,7 +172,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 21,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_13",
     lines = {
         { translationId = true },
@@ -186,7 +186,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 24,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_14",
     lines = {
         { translationId = true },
@@ -201,7 +201,7 @@ ABRRadio.registerTransmission("occ_radio", {
     minDay = 27,
 })
 
-ABRRadio.registerTransmission("occ_radio", {
+ABRRadio.registerTransmission("occ_apocalipse", {
     id = "occ_15",
     lines = {
         { translationId = true },
