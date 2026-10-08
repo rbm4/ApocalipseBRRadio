@@ -15,9 +15,18 @@ M.TIMEOUT = 8
 M.MUSIC_NOTE = "[img=music]"
 M.ANNOUNCEMENT_DURATION = 3
 M.FADE_DURATION = 2
+M.FADE_OUT_FRAMES = 100
+M.FADE_IN_FRAMES = 50
+M.TRANSITION_LEAD_SECONDS = 100 / 60
+M.AFTER_TALK_ANNOUNCEMENT_DURATION = 0.5
+M.TALK_LAST_LINE_HOLD = 2
 M.PLAY_RETRY = 2
 M.INTERMISSION_MIN = 0
 M.INTERMISSION_MAX = 5
+M.LISTEN_RANGE = 200 * 0.9144 -- playback activation/lifetime radius
+M.PROPAGATION_RANGE = 100 * 0.9144 -- maximum audible radius at full radio volume
+M.FULL_VOLUME_RANGE = 10
+M.DISTANCE_FALLOFF_POWER = 2
 
 -- Allow three complete scans before expiring a receiver. The scan length grows
 -- with station count because the authority processes only one station per tick.
@@ -109,7 +118,8 @@ end
 function M.decode(codes)
     if type(codes) ~= "string" or #codes > 100 then return nil end
     local id, sequence, phase = codes:match("^AMP2|([%w_%-]+)|(%d+)|(%a+)$")
-    if phase ~= "announce" and phase ~= "play" and phase ~= "end" then return nil end
+    if phase ~= "announce" and phase ~= "play" and phase ~= "transition"
+        and phase ~= "end" and phase ~= "stop" then return nil end
     if not id or not validId(id) then return nil end
     return id, tonumber(sequence), phase
 end

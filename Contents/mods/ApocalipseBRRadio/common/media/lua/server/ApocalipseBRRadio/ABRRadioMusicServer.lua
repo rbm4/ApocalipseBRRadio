@@ -35,7 +35,7 @@ local function broadcast(station, state, announcement, lineText)
         ABRRadioMusicClient.receiveState(packet)
     end
     local text = lineText
-    if announcement then
+    if announcement and state.announcedSequence ~= state.sequence then
         local caption = M.caption(state.entry)
         if caption ~= "" then text = M.MUSIC_NOTE .. " " .. caption end
     end
@@ -46,6 +46,7 @@ local function broadcast(station, state, announcement, lineText)
             local color = station.color
             radio:SendTransmission(0, 0, station.frequency, text, "", "",
                 color.r, color.g, color.b, station.signalStrength, false)
+            if announcement then state.announcedSequence = state.sequence end
         end
     end
     state.sinceBroadcast = 0
@@ -65,6 +66,8 @@ local function start(station, state, entry)
     state.entry, state.sequence, state.elapsed = entry, S.sequence, 0
     state.phase = entry.kind == "song" and "announce" or "play"
     state.phaseElapsed, state.sinceBroadcast = 0, 0
+    state.announcementDuration = state.afterTalk and M.AFTER_TALK_ANNOUNCEMENT_DURATION or M.ANNOUNCEMENT_DURATION
+    state.afterTalk = false
     state.textIndex = 0
     if entry.kind == "song" then state.previousSong = entry.id end
     if entry.kind == "talk" then state.previousTalk = entry.id end
@@ -101,7 +104,7 @@ local function updateStation(id, station, now)
             state.phaseElapsed = state.phaseElapsed + delta
             state.sinceBroadcast = state.sinceBroadcast + delta
             if state.phase == "announce" then
-                if state.phaseElapsed >= M.ANNOUNCEMENT_DURATION then
+                if state.phaseElapsed >= state.announcementDuration then
                     state.phase, state.phaseElapsed = "play", 0
                     broadcast(station, state)
                 elseif state.sinceBroadcast >= M.HEARTBEAT then
@@ -118,27 +121,36 @@ local function updateStation(id, station, now)
                 end
             else
                 state.elapsed = state.elapsed + delta
-                if state.elapsed >= state.entry.duration then
+                local ending = state.entry.duration
+                if state.entry.kind == "talk" and #state.entry.lines > 0 then
+                    ending = math.min(ending, state.entry.lines[#state.entry.lines].at + M.TALK_LAST_LINE_HOLD)
+                end
+                if state.elapsed >= ending then
                     print("[ABRRadio Music Server] Completed: " .. stationLabel(station)
                         .. "; " .. state.entry.kind .. "=" .. state.entry.id)
                     state.elapsed = state.entry.duration
                     state.phase, state.phaseElapsed = "end", 0
                     broadcast(station, state)
-                    state.wantTalk = state.entry.kind == "song"
-                        and ZombRand(100) < (station.talkChance or 0)
+                    state.wantTalk = state.entry.kind == "song" and #station.talks > 0
                     if state.entry.kind == "song" then
-                        state.intermission = ZombRand(M.INTERMISSION_MIN, M.INTERMISSION_MAX + 1)
+                        state.intermission = state.wantTalk and 0 or ZombRand(M.INTERMISSION_MIN, M.INTERMISSION_MAX + 1)
                         if state.intermission == 0 then
                             state.entry = nil
                             ABRRadioServer.releaseChannel(id, "music")
                             startNext(id, station, state)
                         end
                     else
+                        state.afterTalk = true
                         state.entry = nil
                         ABRRadioServer.releaseChannel(id, "music")
                         startNext(id, station, state)
                     end
                 else
+                    if state.entry.kind == "song" and state.phase == "play"
+                        and state.elapsed >= ending - M.TRANSITION_LEAD_SECONDS then
+                        state.phase = "transition"
+                        broadcast(station, state)
+                    end
                     broadcastTalkLine(station, state)
                     if state.sinceBroadcast >= M.HEARTBEAT then broadcast(station, state) end
                 end
@@ -147,7 +159,7 @@ local function updateStation(id, station, now)
     else
         state.waitReason = "disabled"
         if state.entry then
-            state.phase = "end"
+            state.phase = "stop"
             state.elapsed = state.entry.duration
             broadcast(station, state)
         end
@@ -157,7 +169,8 @@ local function updateStation(id, station, now)
     end
     -- Keep the one-station-per-tick budget, but avoid the 50-tick sleep while
     -- announcing, ending a pause, or delivering short timed announcer lines.
-    local fast = state.entry ~= nil and (state.entry.kind == "talk" or state.phase ~= "play")
+    local fast = state.entry ~= nil and (state.entry.kind == "talk" or state.phase ~= "play"
+        or state.entry.duration - state.elapsed <= M.HEARTBEAT + M.TRANSITION_LEAD_SECONDS)
     if fast ~= (state.fast == true) then
         S.fastStations = S.fastStations + (fast and 1 or -1)
         state.fast = fast
