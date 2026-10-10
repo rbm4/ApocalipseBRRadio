@@ -1,5 +1,6 @@
 """Persist SteamCMD's remembered-login config in an organization Actions secret."""
 import base64
+import binascii
 import json
 import os
 from pathlib import Path
@@ -8,19 +9,48 @@ import subprocess
 import sys
 
 
+class SessionError(Exception):
+    """Only internally authored messages may be shown in Actions logs."""
+
+
 def gh(arguments, data=None):
-    result = subprocess.run(["gh", *arguments], input=data, capture_output=True, check=True, timeout=90)
+    operation = "write organization session secret" if arguments[0] == "secret" else (
+        "read selected repository access" if arguments[-1].endswith("/repositories") else
+        "read organization encryption key" if arguments[-1].endswith("/public-key") else
+        "read organization session secret metadata")
+    try:
+        result = subprocess.run(["gh", *arguments], input=data, capture_output=True, check=True, timeout=90)
+    except subprocess.CalledProcessError as error:
+        # Extract only the numeric status. Raw gh output may contain sensitive data.
+        raw = error.stderr or b""
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        match = re.search(r"HTTP ([1-5][0-9]{2})\b", raw)
+        status = " (HTTP " + match.group(1) + ")" if match else ""
+        raise SessionError("GitHub could not " + operation + status +
+                           ". Check the token resource owner, approval/expiry and organization Secrets permissions.") from None
+    except subprocess.TimeoutExpired:
+        raise SessionError("GitHub timed out while attempting to " + operation + ".") from None
+    except FileNotFoundError:
+        raise SessionError("GitHub CLI (gh) is not installed on the runner.") from None
     return result.stdout
 
 
 def configuration():
     org = os.environ.get("STEAM_SECRETS_ORGANIZATION", "")
-    encoded = os.environ.get("STEAM_CONFIG_VDF", "")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", org) or not os.environ.get("GH_TOKEN"):
-        raise ValueError("Organization and secret writer credential required")
-    config = base64.b64decode(encoded, validate=True)
+    encoded = os.environ.get("STEAM_CONFIG_VDF", "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", org):
+        raise SessionError("STEAM_SECRETS_ORGANIZATION is missing or invalid.")
+    if not os.environ.get("GH_TOKEN"):
+        raise SessionError("STEAM_SESSION_GITHUB_TOKEN is missing or unavailable to this repository.")
+    if not encoded:
+        raise SessionError("STEAM_CONFIG_VDF is missing or unavailable to this repository.")
+    try:
+        config = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise SessionError("STEAM_CONFIG_VDF must contain base64 of the config.vdf file, not its path or raw contents.") from None
     if not config or len(config) > 32768:
-        raise ValueError("Steam config is missing or too large")
+        raise SessionError("Decoded STEAM_CONFIG_VDF must contain between 1 byte and 32 KiB.")
     return org
 
 
@@ -64,6 +94,9 @@ def main():
             print("Refreshed Steam session stored in the organization secret.")
         else:
             raise ValueError("Unsupported arguments")
+    except SessionError as error:
+        print("::error::" + str(error))
+        return 1
     except Exception:
         print("::error::Steam session secret operation failed. Check STEAM_CONFIG_VDF and "
               "STEAM_SESSION_GITHUB_TOKEN organization Secrets permissions. No session data was logged.")

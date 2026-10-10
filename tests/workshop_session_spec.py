@@ -26,6 +26,32 @@ publisher = load("session_publisher", "docker/workshop/publish.py")
 
 
 class SteamSessionTests(unittest.TestCase):
+    def test_http_failures_show_operation_and_status_without_raw_output(self):
+        failure = subprocess.CalledProcessError(1, ["gh"], stderr=b"private-token: Forbidden (HTTP 403)")
+        output = io.StringIO()
+        with patch.object(session, "configuration", return_value="ExampleOrg"), \
+                patch.object(session.sys, "argv", ["session", "--validate-only"]), \
+                patch.object(session.subprocess, "run", side_effect=failure), contextlib.redirect_stdout(output):
+            self.assertEqual(1, session.main())
+        self.assertIn("read organization session secret metadata (HTTP 403)", output.getvalue())
+        self.assertNotIn("private-token", output.getvalue())
+        self.assertNotIn("Forbidden", output.getvalue())
+
+    def test_base64_errors_are_distinguishable_from_github_permissions(self):
+        env = {"STEAM_SECRETS_ORGANIZATION": "ExampleOrg", "GH_TOKEN": "writer-token",
+               "STEAM_CONFIG_VDF": "not-base64!"}
+        output = io.StringIO()
+        with patch.dict(os.environ, env), contextlib.redirect_stdout(output):
+            self.assertEqual(1, session.main())
+        self.assertIn("must contain base64", output.getvalue())
+        self.assertNotIn("not-base64!", output.getvalue())
+
+    def test_pasted_config_can_have_surrounding_whitespace(self):
+        env = {"STEAM_SECRETS_ORGANIZATION": "ExampleOrg", "GH_TOKEN": "writer-token",
+               "STEAM_CONFIG_VDF": "\r\n" + base64.b64encode(b"session").decode() + "\r\n"}
+        with patch.dict(os.environ, env):
+            self.assertEqual("ExampleOrg", session.configuration())
+
     def test_config_is_restored_privately_and_invalid_state_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)
