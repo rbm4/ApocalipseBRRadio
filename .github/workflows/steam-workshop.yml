@@ -20,6 +20,7 @@ jobs:
       test-command: npm ci && npm test
     secrets:
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
       STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
       STEAM_SESSION_GITHUB_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
       PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}

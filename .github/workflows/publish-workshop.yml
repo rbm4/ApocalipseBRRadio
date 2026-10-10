@@ -23,6 +23,8 @@ on:
     secrets:
       STEAM_USERNAME:
         required: false
+      STEAM_PASSWORD:
+        required: false
       STEAM_CONFIG_VDF:
         required: false
       STEAM_SESSION_GITHUB_TOKEN:
@@ -123,6 +125,7 @@ jobs:
         id: steam
         env:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
           WORKSHOP_ID: ${{ inputs.workshop-id }}
           SOURCE_SHA: ${{ github.sha }}
@@ -136,7 +139,7 @@ jobs:
           # Keep the stopped container until the refreshed config has been exported.
           docker run --init --name pz-workshop-publish \
             --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
-            --env STEAM_USERNAME --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
+            --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
             pz-workshop-publisher
       - name: Preserve refreshed Steam login in organization secret
         if: always() && !cancelled() && (steps.steam.outcome == 'success' || steps.steam.outcome == 'failure')
@@ -148,6 +151,10 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p "$RUNNER_TEMP/steam-session"
+          if ! docker cp pz-workshop-publish:/home/steam/steamcmd/authenticated "$RUNNER_TEMP/steam-session/authenticated" 2>/dev/null; then
+            echo "Steam login was not confirmed; retaining the existing organization session secret."
+            exit 0
+          fi
           docker cp pz-workshop-publish:/home/steam/steamcmd/config/config.vdf "$RUNNER_TEMP/steam-session/config.vdf" 2>/dev/null || {
             echo "::error::Steam login state could not be exported; the existing organization secret was retained."
             exit 1

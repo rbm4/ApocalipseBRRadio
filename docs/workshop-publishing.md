@@ -33,6 +33,7 @@ and grant **ApocalipseBRRadio** access with the selected-repositories policy:
 | Secret | Value and where to get it |
 | --- | --- |
 | `STEAM_USERNAME` | The Steam **account login name** for the account that owns Workshop item 3706460551. It is not the profile/display name or SteamID. |
+| `STEAM_PASSWORD` | That account's password, used only when remembered login cannot be confirmed. Add this to enable fresh login with mobile approval. Without it, failed remembered login stops before publication. |
 | `STEAM_CONFIG_VDF` | Base64 of `config/config.vdf` from a successful interactive SteamCMD login for the same account. See bootstrap below. Contains sensitive remembered-login state. |
 | `STEAM_SESSION_GITHUB_TOKEN` | Fine-grained GitHub personal access token with resource owner **ApocalipseBr** and organization **Secrets: read and write**. Create under GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens. An organization owner must authorize/approve it as required by organization policy. It allows the workflow to preserve refreshed Steam login state. |
 | `PZMANAGER_RESTART_URL` | Full HTTPS URL ending in `/api/server/mod-update/restart`, reachable from GitHub-hosted runners. |
@@ -47,9 +48,10 @@ repository list. A classic PAT with `admin:org` (and `repo` for private reposito
 is an alternative when fine-grained tokens are unavailable. Prefer the narrower
 fine-grained token. Token expiry or revocation requires replacing this secret.
 
-No Steam Web API key, SteamID, Workshop ID secret or Steam password is needed for
-routine publishing. Your Steam password is used only during the interactive
-bootstrap, not stored in the workflow or resent on each login.
+No Steam Web API key, SteamID or Workshop ID secret is needed. The password is
+not resent when remembered login works; it is used for a fresh login only after
+the remembered login fails. It stays in a private temporary script, outside
+process arguments and logs, and is never included in the image or artifacts.
 Organization-secret availability for private repositories depends on the GitHub
 plan. Confirm that this repository can access the secrets.
 
@@ -68,9 +70,16 @@ password again issues a new Steam Guard challenge. The
 documents `workshop_build_item` for updating an existing item.
 
 The workflow restores the remembered-login config from `STEAM_CONFIG_VDF` into
-an ephemeral Docker container and logs in with just the username. After SteamCMD
-exits, it copies the resulting config out and updates the same organization secret,
-even if a later Workshop operation failed. It deletes the container, exported
+an ephemeral Docker container and checks username-only login with SteamCMD's
+`info` command. It requires exit zero and `Logon state: Logged On`. If this fails,
+it uses `STEAM_PASSWORD` for a fresh login and prints a prompt to approve the
+sign-in in your Steam mobile app, allowing up to five minutes. Failed or timed-out
+authentication stops before uploading. The upload then reuses the confirmed login.
+
+After confirmed authentication, it copies the resulting config out and updates
+the same organization secret even if the subsequent Workshop operation fails.
+An `authenticated` marker records successful login in the container. Without it,
+the refresh step retains the existing secret instead of saving failed-login state. It deletes the container, exported
 config and staged content during cleanup. No login state enters artifacts or
 Actions caches; secrets are never printed or embedded in the image. Pull requests
 only run package/tests, not authentication, publishing or secret-writing steps.
@@ -79,8 +88,12 @@ GitHub provides the Ubuntu worker, Docker and `gh`; no self-hosted runner or
 persistent Docker volume is required. The account must still own the Workshop
 item, meet the game's requirements and have accepted the Workshop agreement.
 Steam's remembered login is not guaranteed to survive a new machine/IP, expiry or
-account security changes. A rejected session fails without requesting interactive
-input. Refresh the config with the bootstrap procedure if Steam asks for Guard.
+account security changes. The password fallback supports accounts for which
+SteamCMD offers mobile sign-in approval. Open Steam Guard in the mobile app when
+the workflow asks; verify the request and approve within the five-minute window.
+GitHub's console cannot accept an email or authenticator code interactively.
+Accounts requiring code entry may still fail and need local bootstrap. The flow
+never disables Guard or extracts an authenticator seed.
 There is no Steam Web API key that replaces the SteamCMD account login here.
 
 ### Initial Steam Guard bootstrap
@@ -115,7 +128,8 @@ rm -rf -- "$session_dir"
 Authenticate local `gh` with an organization-secret-capable account first. The
 command above grants access only to Radio; when sharing the config with other mod
 repositories, include their names in the comma-separated `--repos` list. Every
-publishing caller must have access to all five secrets and explicitly map them.
+publishing caller must explicitly map the five existing secrets plus
+`STEAM_PASSWORD` to enable fresh-login fallback.
 The automatic refresh preserves this access policy. Config is limited to 32 KiB
 before base64 encoding to fit GitHub's 48 KiB secret limit. Keep the file private;
 it is authentication material, not an ordinary build asset.
@@ -168,9 +182,10 @@ There is no automatic rollback.
 Publication failures classify known Steam messages into Guard, rejected login,
 account/game/item access, agreement or connectivity failures and report the
 SteamCMD exit status. Unknown output remains generic. These classifications help
-diagnose errors without printing Steam's raw output. A successful session-secret
-save only means the config file was copied; it does not prove authentication or
-publication succeeded.
+diagnose errors without printing Steam's raw output. Session-secret
+refresh now requires confirmed authentication, but still does not prove publication
+succeeded. Only explicit confirmation of the target Workshop item permits the
+pzmanager restart hook.
 
 Publishing jobs share an account concurrency group without cancelling active
 uploads. GitHub concurrency is per repository and not FIFO; pending commits can
@@ -208,6 +223,7 @@ jobs:
       project-directory: '.'
     secrets:
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
       STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
       STEAM_SESSION_GITHUB_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
       PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
@@ -227,3 +243,22 @@ to ApocalipseBr. `steam-secrets-organization` defaults to `ApocalipseBr`; overri
 it for another organization. Session refresh always writes its `STEAM_CONFIG_VDF`
 organization secret, so grant the caller access to that same value.
 This PR does not change the farming repository.
+
+## Community approaches reviewed
+
+- [RageAgainstThePixel/upload-steam](https://github.com/RageAgainstThePixel/upload-steam)
+  documents mobile approval and implements remembered login followed by password
+  fallback, then username-only publication. Its
+  [authentication source](https://github.com/RageAgainstThePixel/upload-steam/blob/main/src/auth.ts)
+  checks the `info` logon state. This publisher follows that sequence while
+  retaining its existing packaging, secret persistence and private-script handling.
+- [Steam Workshop Deploy](https://github.com/marketplace/actions/steam-workshop-deploy)
+  documents stored SteamCMD config or generated TOTP as alternative approaches.
+  This workflow does not require a TOTP seed and continues to use the organization
+  secret for the remembered config.
+
+Offline regression tests cover remembered-login success, fresh-login fallback,
+missing password, approval timeout, failed-login markers and password protection.
+Tests run in CI; the first approved login and real Workshop upload still require
+an authenticated live run. Mobile approval is supported by the community approach,
+but has not yet been verified for this account on our hosted runner.

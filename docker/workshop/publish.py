@@ -28,6 +28,8 @@ def restore_config(runtime, encoded):
 
 def failure_reason(output):
     # Classify known messages; never print raw Steam output or account details.
+    if "cached credentials not found" in output.lower():
+        return "Steam could not find usable remembered credentials."
     if re.search(r"Steam Guard|two[- ]?factor|AccountLogonDenied|authenticator code|InvalidLoginAuthCode", output, re.I):
         return "Steam requested or rejected Steam Guard authentication."
     if re.search(r"Invalid Password|InvalidPassword|Invalid Login|InvalidLogin", output, re.I):
@@ -39,6 +41,57 @@ def failure_reason(output):
     if re.search(r"No Connection|NoConnection|ConnectFailed|connection.*failed|timed out", output, re.I):
         return "Steam reported a connection failure."
     return "Steam returned an unrecognized failure or did not confirm the target Workshop item."
+
+
+def login_attempt(steamcmd, username, password=None):
+    with tempfile.TemporaryDirectory(prefix="steam-login-") as directory:
+        commands = Path(directory) / "login.txt"
+        commands.write_text(
+            "@ShutdownOnFailedCommand 1\n@NoPromptForPassword 1\nlogin " + quoted(username)
+            + (" " + quoted(password) if password is not None else "")
+            + "\ninfo\nquit\n", encoding="utf-8")
+        commands.chmod(0o600)
+        return subprocess.run(
+            [steamcmd, "+runscript", str(commands)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            errors="replace", timeout=300 if password is not None else 90,
+        )
+
+
+def logged_on(result):
+    return result.returncode == 0 and bool(re.search(r"Logon state:\s*Logged On\b", result.stdout, re.I))
+
+
+def authenticate(steamcmd, username, password):
+    if not username:
+        raise ValueError("STEAM_USERNAME is required")
+    print("Checking remembered Steam login.", flush=True)
+    try:
+        cached = login_attempt(steamcmd, username)
+        if logged_on(cached):
+            print("Remembered Steam login confirmed.", flush=True)
+            return True
+    except subprocess.TimeoutExpired:
+        pass
+    if not password:
+        print("Remembered login failed. Set organization secret STEAM_PASSWORD to allow "
+              "a fresh login and Steam mobile approval.", file=sys.stderr, flush=True)
+        return False
+    print("Remembered login failed. Starting password login; approve this sign-in in the "
+          "Steam mobile app if prompted. Waiting up to 5 minutes.", flush=True)
+    try:
+        fresh = login_attempt(steamcmd, username, password)
+    except subprocess.TimeoutExpired:
+        print("Steam login timed out waiting for authentication. No upload was attempted.",
+              file=sys.stderr, flush=True)
+        return False
+    if not logged_on(fresh):
+        print("Steam login was not confirmed. " + failure_reason(fresh.stdout)
+              + " SteamCMD exit status: " + str(fresh.returncode)
+              + ". No upload was attempted.", file=sys.stderr, flush=True)
+        return False
+    print("Fresh Steam login confirmed; publishing can proceed.", flush=True)
+    return True
 
 
 def main():
@@ -55,6 +108,12 @@ def main():
         raise ValueError("Unsupported publisher argument")
     username = os.environ.get("STEAM_USERNAME", "")
     restore_config(runtime, os.environ.get("STEAM_CONFIG_VDF", ""))
+    marker = runtime / "authenticated"
+    marker.unlink(missing_ok=True)
+    if not authenticate(steamcmd, username, os.environ.get("STEAM_PASSWORD", "")):
+        return 1
+    marker.write_text("confirmed\n", encoding="utf-8")
+    marker.chmod(0o600)
     item_id = os.environ.get("WORKSHOP_ID", "")
     sha = os.environ.get("SOURCE_SHA", "")
     return publish(Path("/package"), steamcmd, username, item_id, sha)
@@ -72,7 +131,7 @@ def publish(package, steamcmd, username, item_id, sha):
         raise ValueError("Package and target Workshop IDs differ")
     if not (package / "Contents/mods").is_dir() or not (package / "preview.png").is_file():
         raise ValueError("Incomplete Workshop package")
-    # Use Valve's remembered-login flow: supplying a password again can trigger Steam Guard.
+    # Login was confirmed separately; reuse its saved state for the upload.
     with tempfile.TemporaryDirectory(prefix="workshop-publish-") as directory:
         vdf = Path(directory) / "workshop.vdf"
         vdf.write_text('"workshopitem"\n{\n' + "\n".join(
