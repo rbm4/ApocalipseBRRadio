@@ -12,6 +12,10 @@ on:
       project-directory:
         default: '.'
         type: string
+      steam-secrets-organization:
+        description: Organization holding STEAM_CONFIG_VDF.
+        default: ApocalipseBr
+        type: string
       test-command:
         description: Optional test command run from project-directory; empty skips mod tests.
         default: ''
@@ -19,7 +23,9 @@ on:
     secrets:
       STEAM_USERNAME:
         required: false
-      STEAM_PASSWORD:
+      STEAM_CONFIG_VDF:
+        required: false
+      STEAM_SESSION_GITHUB_TOKEN:
         required: false
       PZMANAGER_RESTART_URL:
         required: false
@@ -84,7 +90,7 @@ jobs:
     needs: package
     # Never run untrusted PR code on a publisher or expose Steam credentials to it.
     if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: [self-hosted, linux, x64, steam-workshop]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
       group: steam-workshop-account
@@ -107,34 +113,55 @@ jobs:
           PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
           PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
         run: python3 .workshop-tools/scripts/workshop/request_restart.py --validate-only
+      - name: Validate remembered Steam login and secret writer
+        env:
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          GH_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
+          STEAM_SECRETS_ORGANIZATION: ${{ inputs.steam-secrets-organization }}
+        run: python3 .workshop-tools/scripts/workshop/steam_session.py --validate-only
       - name: Publish existing Workshop item
+        id: steam
         env:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
-          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
           WORKSHOP_ID: ${{ inputs.workshop-id }}
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_PASSWORD" ]]; then
-            echo "::error::Grant this repository access to organization secrets STEAM_USERNAME and STEAM_PASSWORD."
+          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_CONFIG_VDF" ]]; then
+            echo "::error::Grant this repository access to STEAM_USERNAME and STEAM_CONFIG_VDF."
             exit 1
           fi
           docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
-          # Only the dedicated publisher uses this persistent Steam login volume.
-          docker volume inspect pz-workshop-steam-state >/dev/null 2>&1 || {
-            echo "::error::Bootstrap Steam Guard login in pz-workshop-steam-state first; see docs/workshop-publishing.md."
+          # Keep the stopped container until the refreshed config has been exported.
+          docker run --init --name pz-workshop-publish \
+            --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
+            --env STEAM_USERNAME --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
+            pz-workshop-publisher
+      - name: Preserve refreshed Steam login in organization secret
+        if: always() && !cancelled() && (steps.steam.outcome == 'success' || steps.steam.outcome == 'failure')
+        env:
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          GH_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
+          STEAM_SECRETS_ORGANIZATION: ${{ inputs.steam-secrets-organization }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/steam-session"
+          docker cp pz-workshop-publish:/home/steam/steamcmd/config/config.vdf "$RUNNER_TEMP/steam-session/config.vdf" 2>/dev/null || {
+            echo "::error::Steam login state could not be exported; the existing organization secret was retained."
             exit 1
           }
-          docker run --rm --init --name pz-workshop-publish \
-            --mount type=volume,src=pz-workshop-steam-state,dst=/home/steam \
-            --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
-            --env STEAM_USERNAME --env STEAM_PASSWORD --env WORKSHOP_ID --env SOURCE_SHA \
-            pz-workshop-publisher
+          chmod 600 "$RUNNER_TEMP/steam-session/config.vdf"
+          python3 .workshop-tools/scripts/workshop/steam_session.py --save "$RUNNER_TEMP/steam-session/config.vdf"
       - name: Request server restart after successful Steam publish
+        if: always() && !cancelled() && steps.steam.outcome == 'success'
         env:
           PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
           PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
         run: python3 .workshop-tools/scripts/workshop/request_restart.py
-      - name: Remove staged files from persistent runner
+      - name: Remove session data and staged files
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/workshop-package"
+        run: |
+          docker rm -f pz-workshop-publish >/dev/null 2>&1 || true
+          rm -rf -- "$RUNNER_TEMP/steam-session" "$RUNNER_TEMP/workshop-package"
