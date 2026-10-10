@@ -3,3 +3,4 @@ name=ApocalipseBR - Radio
 description=A Framework to control Radio transmissions
 poster=poster.png
 icon=icon.png
+require=ApocalipseBrRCONextension

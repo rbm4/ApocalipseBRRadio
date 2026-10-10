@@ -1,0 +1,25 @@
+name: Steam Workshop
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workshop:
+    uses: ./.github/workflows/publish-workshop.yml
+    with:
+      workshop-id: '3706460551'
+      build-mode: ready
+      project-directory: '.'
+      test-command: npm ci && npm test
+    secrets:
+      STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+      PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
+      PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}

@@ -1,0 +1,93 @@
+"""SteamCMD publisher. Authentication files remain in the private HOME volume."""
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def quoted(value):
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError("Control characters are not allowed in Steam arguments")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def main():
+    # SteamCMD stores config/ssfn state beside its executable, not only in ~/.steam.
+    runtime = Path.home() / "steamcmd"
+    if not runtime.exists():
+        shutil.copytree("/opt/steamcmd", runtime)
+    steamcmd = str(runtime / "steamcmd.sh")
+    os.chdir(runtime)
+    # Used only for the documented interactive Steam Guard bootstrap.
+    if sys.argv[1:] == ["login"]:
+        return subprocess.call([steamcmd])
+    if sys.argv[1:]:
+        raise ValueError("Unsupported publisher argument")
+    username = os.environ.get("STEAM_USERNAME", "")
+    password = os.environ.get("STEAM_PASSWORD", "")
+    item_id = os.environ.get("WORKSHOP_ID", "")
+    sha = os.environ.get("SOURCE_SHA", "")
+    return publish(Path("/package"), steamcmd, username, password, item_id, sha)
+
+
+def publish(package, steamcmd, username, password, item_id, sha):
+    if not username or not password:
+        raise ValueError("STEAM_USERNAME and STEAM_PASSWORD are required")
+    if not re.fullmatch(r"[1-9][0-9]{0,19}", item_id):
+        raise ValueError("An existing Workshop item ID is required")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Invalid source commit")
+    manifest = json.loads((package / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("workshop_id") != item_id:
+        raise ValueError("Package and target Workshop IDs differ")
+    if not (package / "Contents/mods").is_dir() or not (package / "preview.png").is_file():
+        raise ValueError("Incomplete Workshop package")
+    # Temporary files contain the password; never put it in process arguments or logs.
+    with tempfile.TemporaryDirectory(prefix="workshop-publish-") as directory:
+        vdf = Path(directory) / "workshop.vdf"
+        vdf.write_text('"workshopitem"\n{\n' + "\n".join(
+            "    " + quoted(key) + " " + quoted(value) for key, value in {
+                "appid": "108600",
+                "publishedfileid": item_id,
+                "contentfolder": str(package / "Contents"),
+                "previewfile": str(package / "preview.png"),
+                "changenote": "Automated update from commit " + sha,
+            }.items()) + "\n}\n", encoding="utf-8")
+        commands = Path(directory) / "publish.txt"
+        commands.write_text(
+            "@ShutdownOnFailedCommand 1\n"
+            "@NoPromptForPassword 1\n"
+            "login " + quoted(username) + " " + quoted(password) + "\n"
+            "workshop_build_item " + quoted(str(vdf)) + "\nquit\n", encoding="utf-8")
+        commands.chmod(0o600)
+        # Steam logs can contain account/session details. Do not print or upload them.
+        result = subprocess.run(
+            [steamcmd, "+runscript", str(commands)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            errors="replace", timeout=1200,
+        )
+        # SteamCMD can return zero even after a failed Workshop operation.
+        success = re.search(
+            r"Success\.\s+(?:Published|Updated)\s+Item\s+" + re.escape(item_id) + r"\b",
+            result.stdout, re.IGNORECASE,
+        )
+        if result.returncode != 0 or not success:
+            print("SteamCMD did not confirm publication. Check item ownership/game access, "
+                  "Steam Guard session, accepted Workshop terms, and Steam connectivity. "
+                  "Re-bootstrap login interactively if Steam requests authentication.", file=sys.stderr)
+            return 1
+        print("Published Workshop item " + item_id + " from commit " + sha)
+        return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired):
+        # Do not echo exception values, credential-bearing commands, or Steam output.
+        print("Workshop publishing failed: configuration, package, or SteamCMD timeout error.", file=sys.stderr)
+        sys.exit(1)

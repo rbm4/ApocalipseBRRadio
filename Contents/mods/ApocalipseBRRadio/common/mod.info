@@ -5,3 +5,4 @@ poster=poster.png
 url=https://apocalipse.cloud
 author=Hypothetic
 versionMin=42.0.0
+require=ApocalipseBrRCONextension
