@@ -1,0 +1,112 @@
+name: Reusable Steam Workshop publisher
+
+on:
+  workflow_call:
+    inputs:
+      workshop-id:
+        required: true
+        type: string
+      build-mode:
+        default: ready
+        type: string
+      project-directory:
+        default: '.'
+        type: string
+    secrets:
+      STEAM_USERNAME:
+        required: false
+      STEAM_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out mod source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # A separate checkout makes this workflow reusable from another mod repository.
+      # On the radio repository it uses the exact triggering commit, including on PRs.
+      - name: Check out publishing tools
+        uses: actions/checkout@v4
+        with:
+          repository: ApocalipseBr/ApocalipseBRRadio
+          ref: ${{ github.repository == 'ApocalipseBr/ApocalipseBRRadio' && github.sha || 'master' }}
+          path: .workshop-tools
+          persist-credentials: false
+      - name: Set up Node for optional pzstudio projects
+        if: inputs.build-mode == 'pzstudio'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and stage Workshop package
+        env:
+          BUILD_MODE: ${{ inputs.build-mode }}
+          PROJECT_DIRECTORY: ${{ inputs.project-directory }}
+          WORKSHOP_ID: ${{ inputs.workshop-id }}
+        run: bash .workshop-tools/scripts/workshop/package.sh
+      - name: Check packaging and publisher behavior without Steam access
+        run: python3 -m unittest discover -s .workshop-tools/tests -p workshop_publishing_spec.py
+      - name: Validate publisher container build
+        run: docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
+      - name: Save Workshop package
+        uses: actions/upload-artifact@v4
+        with:
+          name: workshop-package
+          path: ${{ runner.temp }}/workshop-package
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: package
+    # Never run untrusted PR code on a publisher or expose Steam credentials to it.
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, linux, x64, steam-workshop]
+    timeout-minutes: 30
+    concurrency:
+      group: steam-workshop-account
+      cancel-in-progress: false
+    steps:
+      - name: Check out publishing tools
+        uses: actions/checkout@v4
+        with:
+          repository: ApocalipseBr/ApocalipseBRRadio
+          ref: ${{ github.repository == 'ApocalipseBr/ApocalipseBRRadio' && github.sha || 'master' }}
+          path: .workshop-tools
+          persist-credentials: false
+      - name: Restore Workshop package
+        uses: actions/download-artifact@v4
+        with:
+          name: workshop-package
+          path: ${{ runner.temp }}/workshop-package
+      - name: Publish existing Workshop item
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          WORKSHOP_ID: ${{ inputs.workshop-id }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_PASSWORD" ]]; then
+            echo "::error::Grant this repository access to organization secrets STEAM_USERNAME and STEAM_PASSWORD."
+            exit 1
+          fi
+          docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
+          # Only the dedicated publisher uses this persistent Steam login volume.
+          docker volume inspect pz-workshop-steam-state >/dev/null 2>&1 || {
+            echo "::error::Bootstrap Steam Guard login in pz-workshop-steam-state first; see docs/workshop-publishing.md."
+            exit 1
+          }
+          docker run --rm --init --name pz-workshop-publish \
+            --mount type=volume,src=pz-workshop-steam-state,dst=/home/steam \
+            --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
+            --env STEAM_USERNAME --env STEAM_PASSWORD --env WORKSHOP_ID --env SOURCE_SHA \
+            pz-workshop-publisher
+      - name: Remove staged files from persistent runner
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/workshop-package"
