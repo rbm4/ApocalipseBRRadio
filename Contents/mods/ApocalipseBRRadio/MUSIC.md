@@ -258,3 +258,35 @@ removal, retuning, power-off, mute, and leaving range still release state, so
 later listening starts at the beginning as before. Replaced DeviceData settles
 into one new receiver state. Client logs include airing sequence and receiver
 identity; release reasons distinguish eligibility loss from heartbeat expiry.
+
+Speaker profiles use `DeviceData.getBaseVolumeRange()` as the native hardware
+rating, before slider and location effects. Vehicle radios inherit this rating
+from the installed inventory item. A rating of 15 is the full-strength reference;
+ratings above 15 are capped. Portable speakers receive an additional 0.6 scale;
+vehicle and stationary scales default to 1. The portable/two-way flags identify
+hand radios versus walkie-talkies, while `getVehicle` identifies vehicle parts.
+RF transmit range is not used as a speaker metric.
+
+`strength = clamp(baseVolumeRange / 15, 0, 1) * categoryScale`, capped at 1.
+Audible range is `100 yards * radioVolume * strength`, inner reference range is
+`10 tiles * radioVolume * strength`, and final gain is
+`radioVolume * strength * distanceFalloff^2 * transitionGain`. Native rating zero
+makes speakers silent without dividing by zero. Headphones bypass speaker and
+propagation modifiers. Playback activation/lifetime remains 200 yards. Defaults
+are configurable through `SPEAKER_REFERENCE_RANGE`, `PORTABLE_SPEAKER_SCALE`,
+`VEHICLE_SPEAKER_SCALE`, and `STATIONARY_SPEAKER_SCALE` in the shared module.
+Audio-start logs include device category and computed speaker strength.
+
+For an effective nominal propagation radius above 60 yards, attenuation progress
+is multiplied by 1.2 before the existing squared falloff. Every speaker profile
+also receives a universal 1.3 multiplier, giving a combined 1.56 rate above
+60 yards and a 1.3 rate at or below 60 yards. The nominal radius
+and inner reference distance are not expanded to compensate, so silence occurs
+sooner: `inner + (nominalRadius - inner) / combinedRate`. A full-strength 100-yard
+profile reaches zero near 68 yards. Smaller profiles also become silent sooner
+through the universal multiplier; ranges are not expanded to compensate. The threshold is evaluated after radio volume and hardware modifiers,
+with a small floating-point tolerance at exactly 60 yards. Playback activation
+and lifetime remain 200 yards. Transition gain is a separate multiplier: the
+100-frame reduction to 50% halves the already hardware/distance-adjusted output
+without changing the audible-radius calculation. Tuning constants are
+`FASTER_FALLOFF_THRESHOLD`, `LONG_RANGE_FALLOFF_RATE`, and `GLOBAL_FALLOFF_RATE`.

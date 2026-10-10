@@ -27,6 +27,13 @@ M.LISTEN_RANGE = 200 * 0.9144 -- playback activation/lifetime radius
 M.PROPAGATION_RANGE = 100 * 0.9144 -- maximum audible radius at full radio volume
 M.FULL_VOLUME_RANGE = 10
 M.DISTANCE_FALLOFF_POWER = 2
+M.FASTER_FALLOFF_THRESHOLD = 60 * 0.9144
+M.LONG_RANGE_FALLOFF_RATE = 1.2
+M.GLOBAL_FALLOFF_RATE = 1.3
+M.SPEAKER_REFERENCE_RANGE = 15
+M.PORTABLE_SPEAKER_SCALE = 0.6
+M.VEHICLE_SPEAKER_SCALE = 1
+M.STATIONARY_SPEAKER_SCALE = 1
 
 -- Allow three complete scans before expiring a receiver. The scan length grows
 -- with station count because the authority processes only one station per tick.

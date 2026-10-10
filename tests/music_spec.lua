@@ -22,6 +22,7 @@ function getGameTime() return { getRealworldSecondsSinceLastUpdate = function() 
 function sendClientCommand() error("music sent a listener report") end
 CharacterTrait = { DEAF = "deaf" }
 local on, frequency, volume, distance = true, 94200, 1, 0
+local baseSpeakerRange, portableSpeaker, twoWaySpeaker = 15, false, false
 local deaf, media, blocked, placed, installed = false, false, false, true, true
 local equipped, headphoneType = nil, -1
 local listReads, squareReads = {}, 0
@@ -47,6 +48,9 @@ function getNumActivePlayers() return 1 end
 function getSpecificPlayer() return player end
 local micMuted = false
 local data = { getIsTurnedOn = function() return on end, getChannel = function() return frequency end,
+    getBaseVolumeRange = function() return baseSpeakerRange end,
+    getIsPortable = function() return portableSpeaker end,
+    getIsTwoWay = function() return twoWaySpeaker end,
     getMicIsMuted = function() return micMuted end, setMicIsMuted = function(_, value) micMuted = value end,
     getDeviceVolume = function() return volume end, getDeviceSoundVolumeRange = function() return 20 end,
     getHeadphoneType = function() return headphoneType end, isPlayingMedia = function() return media end,
@@ -128,8 +132,11 @@ local function active() return C.devices[device] end
 local function distanceGain(at)
     local d = math.sqrt((at + 0.5)^2 + 0.5^2)
     local level = math.min(1, math.max(0, volume))
-    return math.min(1, math.max(0, (M.PROPAGATION_RANGE * level - d)
-        / ((M.PROPAGATION_RANGE - M.FULL_VOLUME_RANGE) * level))) ^ M.DISTANCE_FALLOFF_POWER
+    local propagation = M.PROPAGATION_RANGE * level
+    local inner = M.FULL_VOLUME_RANGE * level
+    local rate = M.GLOBAL_FALLOFF_RATE
+        * (propagation > M.FASTER_FALLOFF_THRESHOLD + 0.000001 and M.LONG_RANGE_FALLOFF_RATE or 1)
+    return math.min(1, math.max(0, 1 - (d - inner) / (propagation - inner) * rate)) ^ M.DISTANCE_FALLOFF_POWER
 end
 for _, phase in ipairs({ "announce", "play", "end" }) do
     local codes = M.encode("whole", 1790000000000, phase)
@@ -152,11 +159,26 @@ advance(0.1)
 assert(first.gain == 1, "50-frame fade-in did not reach radio volume")
 assert(#attempts == 1 and #captions == 0,
     "duplicate heartbeat restarted music or displayed removed lyrics")
+baseSpeakerRange, portableSpeaker, twoWaySpeaker = 8, true, true
+advance(delta)
+assert(math.abs(first.gain - 0.32) < 0.000001,
+    "budget walkie speaker did not reduce maximum loudness")
+local hardwareHandle = active().handle
+distance = 40 * 0.9144
+advance(delta)
+assert(first.gain == 0 and active().handle == hardwareHandle,
+    "budget walkie's 32-yard propagation radius changed playback lifetime")
+baseSpeakerRange, portableSpeaker, twoWaySpeaker = 30, false, false
+distance = 0
+advance(delta)
+assert(first.gain == 1 and active().handle == hardwareHandle,
+    "large modded speaker exceeded the maximum or restarted playback")
+baseSpeakerRange = 15
 local midway = (M.PROPAGATION_RANGE + M.FULL_VOLUME_RANGE) / 2
 distance = math.sqrt(midway^2 - 0.5^2) - 0.5
 advance(delta)
-assert(math.abs(first.gain - 0.25) < 0.000001,
-    "midway through attenuation zone did not drop to one-quarter gain")
+assert(math.abs(first.gain - 0.0484) < 0.000001,
+    "long-range midpoint did not stack 1.3 and 1.2 attenuation rates")
 local uninterruptedHandle, uninterruptedStart = active().handle, active().startedAt
 volume = 0.5
 advance(delta)
@@ -164,8 +186,8 @@ assert(first.gain == 0 and active().handle == uninterruptedHandle and active().s
     "smaller propagation radius stopped playback instead of reducing gain")
 distance = math.sqrt((midway * 0.5)^2 - 0.5^2) - 0.5
 advance(delta)
-assert(math.abs(first.gain - 0.125) < 0.000001,
-    "half volume did not halve propagation range and scale final gain")
+assert(math.abs(first.gain - 0.06125) < 0.000001,
+    "short-range midpoint did not apply the universal 1.3 attenuation rate")
 volume = 1
 advance(delta)
 assert(first.gain > 0.125 and active().handle == uninterruptedHandle and #attempts == 1,
@@ -240,14 +262,17 @@ for _, cause in ipairs({ "retune", "mute", "range", "pickup", "media", "blocked"
     frequency, volume, distance, placed, media, blocked, deaf = 94200, 1, 0, true, false, false, false
 end
 device.getPlayer = function() return player end
+baseSpeakerRange, portableSpeaker = 8, true
 equipped, headphoneType = device, 0
 heartbeat("whole", 30); advance(0.1)
 assert(active().emitter.spatial == false, "headphones were spatial")
+assert(active().emitter.gain == 0.5, "headphones inherited the small speaker's loudness cap")
 headphoneType = -1; advance(0.1)
 assert(active().emitter.spatial == false, "speaker switch re-enabled directional panning")
 equipped = nil; advance(0.1)
 assert(active() == nil, "unequipping did not release playback")
 device.getPlayer = nil
+baseSpeakerRange, portableSpeaker = 10, false
 local vehicle = { getX = function() return 3 end, getY = function() return 4 end,
     getZ = function() return 0 end, isRemovedFromWorld = function() return false end,
     getSquare = function() return {} end }
@@ -255,9 +280,12 @@ device.getVehicle = function() return vehicle end
 device.getInventoryItem = function() return installed and {} or nil end
 heartbeat("whole", 31); advance(0.1)
 assert(active().emitter.position[1] == 3 and active().emitter.position[2] == 4, "vehicle placement")
+assert(math.abs(active().emitter.gain - 1 / 3) < 0.000001,
+    "vehicle speaker did not inherit its installed radio's native rating")
 installed = false; advance(0.1)
 assert(active() == nil, "uninstalling did not release playback")
 device.getVehicle, device.getInventoryItem = nil, nil
+baseSpeakerRange = 15
 heartbeat("whole", 32); advance(M.getHeartbeatTimeout() + 0.3)
 assert(active().expired and active().ended and C.fading[device], "heartbeat timeout did not fade")
 local expiredStarts = #attempts
@@ -472,7 +500,7 @@ assert(active() and active().handle, "silent command did not start a discovered 
 assert(active().emitter.gain == 0 and not active().emitter.spatial,
     "150-yard receiver did not start silently before reaching audible range")
 local warmHandle, warmStart, warmAttempts = active().handle, active().startedAt, #attempts
-distance = 90 * 0.9144
+distance = 60 * 0.9144
 advance(delta)
 assert(active().emitter.gain > 0 and active().handle == warmHandle
     and active().startedAt == warmStart and #attempts == warmAttempts,
@@ -521,4 +549,26 @@ on = true
 advance(delta)
 assert(C.devices[device] == nil, "discovery revived an expired command snapshot")
 device.getDeviceData = function() return data end
+-- Long-range acceleration must compose with the 50% transition gain, while
+-- portable profiles whose nominal propagation is exactly 60 yards stay unchanged.
+on, volume, distance = true, 1, 0
+local transitionSequence = S.sequence + 2000
+heartbeat("whole", transitionSequence, "play")
+advance(5.1)
+baseSpeakerRange, portableSpeaker = 15, true
+local portableMidpoint = (M.PROPAGATION_RANGE + M.FULL_VOLUME_RANGE) * M.PORTABLE_SPEAKER_SCALE / 2
+distance = math.sqrt(portableMidpoint^2 - 0.5^2) - 0.5
+advance(delta)
+assert(math.abs(active().emitter.gain - 0.0735) < 0.000001,
+    "60-yard profile did not apply only the universal 1.3 rate")
+portableSpeaker = false
+distance = math.sqrt(midway^2 - 0.5^2) - 0.5
+advance(delta)
+local beforeTransition = active().emitter.gain
+assert(math.abs(beforeTransition - 0.0484) < 0.000001)
+heartbeat("whole", transitionSequence, "transition")
+advance(10)
+assert(math.abs(active().emitter.gain - beforeTransition * 0.5) < 0.000001,
+    "long-range attenuation did not respect the half-volume transition")
+cleanup()
 print("PASS: receiver lifecycle, arbitration, round-robin, heartbeat timeout, microphone protection/restoration and discovery budget")

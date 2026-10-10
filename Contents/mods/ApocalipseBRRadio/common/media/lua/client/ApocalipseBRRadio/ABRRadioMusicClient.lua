@@ -184,6 +184,18 @@ local function position(device)
     return device:getX() + 0.5, device:getY() + 0.5, device:getZ(), nil
 end
 
+local function speakerProfile(device, data)
+    local category, scale = "stationary", M.STATIONARY_SPEAKER_SCALE
+    if device.getVehicle then
+        category, scale = "vehicle", M.VEHICLE_SPEAKER_SCALE
+    elseif data:getIsPortable() then
+        category = data:getIsTwoWay() and "walkie_talkie" or "hand_radio"
+        scale = M.PORTABLE_SPEAKER_SCALE
+    end
+    local strength = math.min(1, math.max(0, data:getBaseVolumeRange() / M.SPEAKER_REFERENCE_RANGE)) * scale
+    return math.min(1, strength), category
+end
+
 local function audible(device, data)
     if not data:getIsTurnedOn() or data:getDeviceVolume() <= 0
         or data:isPlayingMedia() or data:isNoTransmit() then return false end
@@ -192,8 +204,12 @@ local function audible(device, data)
     local range = MUSIC_RANGE
     -- Audible propagation shrinks with volume; receiver lifetime stays fixed.
     local level = math.min(1, math.max(0, data:getDeviceVolume()))
-    local propagationRange = M.PROPAGATION_RANGE * level
-    local fullVolumeRange = M.FULL_VOLUME_RANGE * level
+    local strength = speakerProfile(device, data)
+    local propagationRange = M.PROPAGATION_RANGE * level * strength
+    local fullVolumeRange = M.FULL_VOLUME_RANGE * level * strength
+    local falloffRate = M.GLOBAL_FALLOFF_RATE
+        * (propagationRange > M.FASTER_FALLOFF_THRESHOLD + 0.000001
+            and M.LONG_RANGE_FALLOFF_RATE or 1)
     local nearestGain
     for i = 0, getNumActivePlayers() - 1 do
         local player = getSpecificPlayer(i)
@@ -204,9 +220,13 @@ local function audible(device, data)
                 local distanceSquared = (player:getX() - x)^2 + (player:getY() - y)^2
                     + ((player:getZ() - z) * 3)^2
                 if distanceSquared <= range^2 then
-                    local falloff = math.min(1, math.max(0,
-                        (propagationRange - math.sqrt(distanceSquared)) / (propagationRange - fullVolumeRange)))
-                    local gain = falloff ^ M.DISTANCE_FALLOFF_POWER
+                    local falloff = 0
+                    if propagationRange > 0 then
+                        local progress = (math.sqrt(distanceSquared) - fullVolumeRange)
+                            / (propagationRange - fullVolumeRange)
+                        falloff = math.min(1, math.max(0, 1 - progress * falloffRate))
+                    end
+                    local gain = strength * falloff ^ M.DISTANCE_FALLOFF_POWER
                     nearestGain = math.max(nearestGain or 0, gain)
                 end
             end
@@ -340,9 +360,11 @@ local function play(device, state, elapsed)
             tail.mode, tail.frames, tail.fromGain = "crossfade", 0, tail.gain
         end
     end
+    local strength, category = speakerProfile(device, device:getDeviceData())
     print("[ABRRadio Music Client] Audio started: " .. state.entry.station
         .. "; content=" .. state.entry.id .. "; sequence=" .. state.sequence
-        .. "; receiver=" .. tostring(device) .. "; sound=" .. sound)
+        .. "; receiver=" .. tostring(device) .. "; device=" .. category
+        .. "; speaker_strength=" .. string.format("%.2f", strength) .. "; sound=" .. sound)
 end
 
 local function updateAudio(device, state, data, gain, x, y, z, distanceGain)
