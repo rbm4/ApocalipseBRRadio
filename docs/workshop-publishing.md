@@ -3,8 +3,8 @@
 `.github/workflows/steam-workshop.yml` packages this Build 42 mod on pull requests
 and pushes to **master**. Only a push to master or a manual dispatch on master
 publishes existing Workshop item **3706460551**, using Steam App ID **108600**.
-Merging this PR schedules publishing: provision the publisher before merging if
-you want the first run to complete.
+Both jobs use GitHub-hosted `ubuntu-latest` runners. Configure the organization
+secrets and bootstrap the Steam login below before the first publishing run.
 
 The shared workflow `.github/workflows/publish-workshop.yml` supports:
 
@@ -33,11 +33,23 @@ and grant **ApocalipseBRRadio** access with the selected-repositories policy:
 | Secret | Value and where to get it |
 | --- | --- |
 | `STEAM_USERNAME` | The Steam **account login name** for the account that owns Workshop item 3706460551. It is not the profile/display name or SteamID. |
-| `STEAM_PASSWORD` | That Steam account's current login password. No API key is involved. |
+| `STEAM_CONFIG_VDF` | Base64 of `config/config.vdf` from a successful interactive SteamCMD login for the same account. See bootstrap below. Contains sensitive remembered-login state. |
+| `STEAM_SESSION_GITHUB_TOKEN` | Fine-grained GitHub personal access token with resource owner **ApocalipseBr** and organization **Secrets: read and write**. Create under GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens. An organization owner must authorize/approve it as required by organization policy. It allows the workflow to preserve refreshed Steam login state. |
+| `PZMANAGER_RESTART_URL` | Full HTTPS URL ending in `/api/server/mod-update/restart`, reachable from GitHub-hosted runners. |
+| `PZMANAGER_MOD_UPDATE_TOKEN` | Full API key generated through pzmanager's API-key CRUD. Sent as `X-API-Key`. |
 
 The caller explicitly maps these organization secrets into the reusable workflow.
-GitHub supplies GITHUB_TOKEN for checkout/artifacts; no GitHub App secret, personal
-token, Steam Web API key, SteamID, or Workshop ID secret is needed.
+GitHub supplies `GITHUB_TOKEN` for checkout/artifacts, but it cannot write organization
+secrets. The separate `STEAM_SESSION_GITHUB_TOKEN` provides that permission. The
+workflow captures `gh` output and sends the refreshed secret through stdin for
+GitHub public-key encryption, retaining its existing visibility and selected
+repository list. A classic PAT with `admin:org` (and `repo` for private repositories)
+is an alternative when fine-grained tokens are unavailable. Prefer the narrower
+fine-grained token. Token expiry or revocation requires replacing this secret.
+
+No Steam Web API key, SteamID, Workshop ID secret or Steam password is needed for
+routine publishing. Your Steam password is used only during the interactive
+bootstrap, not stored in the workflow or resent on each login.
 Organization-secret availability for private repositories depends on the GitHub
 plan. Confirm that this repository can access the secrets.
 
@@ -45,49 +57,72 @@ The Steam account must own the Workshop item, have the required Project Zomboid
 access, and accept Steam's Workshop agreement. GitHub repository access does not
 grant Steam item ownership.
 
-## Dedicated Linux publisher
+## GitHub-hosted publishing and Steam authentication
 
-Provision a persistent **x86-64 Linux** host with Docker Engine and a self-hosted
-GitHub Actions runner registered for this repository. Give it the custom label
-**steam-workshop**, alongside `self-hosted`, `linux`, and `x64`. The runner account
-needs Docker access and outbound Steam connectivity, including non-HTTP traffic.
+Valve's [Steamworks upload documentation](https://partner.steamgames.com/doc/sdk/uploading)
+under automated builds says to complete an initial login with password and Steam
+Guard, then run subsequent logins **without a password** and preserve
+`config/config.vdf`, which may change after login. It warns that providing the
+password again issues a new Steam Guard challenge. The
+[Workshop documentation](https://partner.steamgames.com/doc/features/workshop/implementation)
+documents `workshop_build_item` for updating an existing item.
 
-Use this runner for trusted publishing jobs only. The workflow's job condition
-prevents pull requests from scheduling on it or receiving Steam secrets. Passwords
-are never put in the image, process arguments, published artifacts, or printed
-Steam output. The host and Docker administrators can access the login state and
-must be trusted.
+The workflow restores the remembered-login config from `STEAM_CONFIG_VDF` into
+an ephemeral Docker container and logs in with just the username. After SteamCMD
+exits, it copies the resulting config out and updates the same organization secret,
+even if a later Workshop operation failed. It deletes the container, exported
+config and staged content during cleanup. No login state enters artifacts or
+Actions caches; secrets are never printed or embedded in the image. Pull requests
+only run package/tests, not authentication, publishing or secret-writing steps.
 
-### One-time Steam Guard login
+GitHub provides the Ubuntu worker, Docker and `gh`; no self-hosted runner or
+persistent Docker volume is required. The account must still own the Workshop
+item, meet the game's requirements and have accepted the Workshop agreement.
+Steam's remembered login is not guaranteed to survive a new machine/IP, expiry or
+account security changes. A rejected session fails without requesting interactive
+input. Refresh the config with the bootstrap procedure if Steam asks for Guard.
+There is no Steam Web API key that replaces the SteamCMD account login here.
 
-On the publisher machine, check out this repository and run:
+### Initial Steam Guard bootstrap
+
+On a trusted local machine with Docker and `gh`, check out the repository and run:
 
 ```sh
 docker build -t pz-workshop-publisher docker/workshop
-docker volume create pz-workshop-steam-state
-docker run --rm -it \
-  --mount type=volume,src=pz-workshop-steam-state,dst=/home/steam \
-  pz-workshop-publisher login
+docker run -it --name pz-steam-bootstrap pz-workshop-publisher login
 ```
 
-At the **Steam>** prompt enter `login YOUR_STEAM_LOGIN_NAME`, then supply your
-password when prompted. Complete Steam Guard using your Steam email or mobile
-authenticator, or approve the mobile sign-in if requested. After successful login,
-enter `quit`. Use the same account as the organization secrets.
+At the `Steam>` prompt enter `login YOUR_STEAM_LOGIN_NAME`, supply the password
+when prompted, and complete Steam Guard. Enter `info` to verify the account is
+connected, then `quit`. Use the account named in `STEAM_USERNAME`.
 
-The private volume persists the entire runtime SteamCMD installation, including
-its adjacent config/ssfn files and home state. Keep it on this publisher machine;
-never upload it to GitHub artifacts or public caches.
+Copy the saved config into a private temporary directory and upload its base64
+representation directly to the organization secret without displaying it:
 
-After setup, manually dispatch Steam Workshop on master and confirm the item's
-update time/changenote. Development checks do not perform a live publish; this
-first authenticated smoke run confirms SteamCMD support and account permissions
-for your item.
+```sh
+umask 077
+session_dir="$(mktemp -d)"
+docker cp pz-steam-bootstrap:/home/steam/steamcmd/config/config.vdf "$session_dir/config.vdf"
+chmod 600 "$session_dir/config.vdf"
+python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64encode(sys.stdin.buffer.read()))' \
+  < "$session_dir/config.vdf" \
+  | gh secret set STEAM_CONFIG_VDF --org ApocalipseBr \
+      --visibility selected --repos ApocalipseBRRadio
+docker rm pz-steam-bootstrap
+rm -rf -- "$session_dir"
+```
 
-Steam may request another Guard challenge after session expiry, machine/IP
-changes, or account changes. Repeat the interactive login then. A one-time
-Steam Guard code is not a permanent organization secret. This workflow does not
-disable Guard or extract mobile-authenticator keys.
+Authenticate local `gh` with an organization-secret-capable account first. The
+command above grants access only to Radio; when sharing the config with other mod
+repositories, include their names in the comma-separated `--repos` list. Every
+publishing caller must have access to all five secrets and explicitly map them.
+The automatic refresh preserves this access policy. Config is limited to 32 KiB
+before base64 encoding to fit GitHub's 48 KiB secret limit. Keep the file private;
+it is authentication material, not an ordinary build asset.
+
+After bootstrap, manually dispatch Steam Workshop on master and confirm the
+item's timestamp/changenote and the pzmanager restart response. This is the first
+real authentication/publishing check: offline CI tests mock Steam and GitHub.
 
 ## Failure handling
 
@@ -110,22 +145,27 @@ but the Steam update remains published; retry the restart separately. The hook
 does not retry or publish again automatically. The publishing runner must be
 able to reach the backend over HTTPS.
 
-Missing secrets fail before launching the container. A missing state volume
-reports bootstrap instructions. SteamCMD has a 20-minute timeout and the publish
+Missing session secrets or unreadable secret policy fail before launching SteamCMD.
+Saving refreshed state requires organization-secret write permission; if it fails,
+the job fails visibly but a confirmed publish still triggers the restart hook. SteamCMD has a 20-minute timeout and the publish
 job a 30-minute limit. Both its exit status and explicit successful publication of
 the expected item are required; exit zero alone is insufficient.
 
 Raw Steam output is not printed/uploaded because it can contain account/session
 information. Diagnose Steam login, item ownership, agreements, or connectivity
-through the interactive container when publishing fails. A Workshop publish is
+through a trusted local interactive container when publishing fails. A Workshop publish is
 an external side effect: inspect the changenote before retrying an uncertain run.
 There is no automatic rollback.
 
 Publishing jobs share an account concurrency group without cancelling active
 uploads. GitHub concurrency is per repository and not FIFO; pending commits can
 be superseded by later pushes. When reusing one account across repositories,
-use one dedicated runner or a shared host lock to avoid concurrent Steam sessions.
-Cleanup deletes the staged package but retains the authentication volume.
+use separate Steam accounts/session secrets or a centralized publishing workflow
+for organization-wide serialization. Separate repositories do not share a GitHub
+concurrency lock. Organization secrets are snapshotted when a workflow is queued;
+a queued run can still receive the previous config after another run refreshes it.
+Do not run multiple publishers simultaneously against the same account/config.
+Cleanup deletes the container and exported login state on the hosted worker.
 
 ## Reuse for pzstudio
 
@@ -153,7 +193,8 @@ jobs:
       project-directory: '.'
     secrets:
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
-      STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+      STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+      STEAM_SESSION_GITHUB_TOKEN: ${{ secrets.STEAM_SESSION_GITHUB_TOKEN }}
       PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
       PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
 ```
@@ -166,5 +207,8 @@ own triggering commit.
 
 Organization secrets can only be granted to repositories in that organization.
 If the farming repository remains under rbm4, give it equivalent repository
-secrets and its own trusted publishing-runner access, or transfer it to ApocalipseBr.
+secrets and access to the configured organization-secret writer, or transfer it
+to ApocalipseBr. `steam-secrets-organization` defaults to `ApocalipseBr`; override
+it for another organization. Session refresh always writes its `STEAM_CONFIG_VDF`
+organization secret, so grant the caller access to that same value.
 This PR does not change the farming repository.

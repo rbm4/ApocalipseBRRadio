@@ -80,16 +80,15 @@ class WorkshopTests(unittest.TestCase):
 
     def test_publisher_uses_contents_and_protects_credentials(self):
         self.staged()
-        password = 'example password "with quotes"'
         command_paths = []
 
         def steamcmd(args, **kwargs):
-            self.assertNotIn(password, str(args))
+            self.assertNotIn("test_account", str(args))
             commands = Path(args[-1])
             command_paths.append(commands)
             self.assertEqual(0o600, commands.stat().st_mode & 0o777)
             text = commands.read_text()
-            self.assertIn("login " + publisher.quoted("test_account") + " " + publisher.quoted(password), text)
+            self.assertIn("login " + publisher.quoted("test_account") + "\n", text)
             vdf = (commands.parent / "workshop.vdf").read_text()
             self.assertIn('"appid" "108600"', vdf)
             self.assertIn('"publishedfileid" "' + ITEM + '"', vdf)
@@ -99,8 +98,8 @@ class WorkshopTests(unittest.TestCase):
 
         out = io.StringIO()
         with patch.object(publisher.subprocess, "run", side_effect=steamcmd), contextlib.redirect_stdout(out):
-            self.assertEqual(0, publisher.publish(self.package, "/fake/steamcmd", "test_account", password, ITEM, SHA))
-        self.assertNotIn(password, out.getvalue())
+            self.assertEqual(0, publisher.publish(self.package, "/fake/steamcmd", "test_account", ITEM, SHA))
+        self.assertNotIn("test_account", out.getvalue())
         self.assertTrue(all(not path.exists() for path in command_paths))
 
     def test_zero_exit_without_expected_publication_fails_and_hides_raw_output(self):
@@ -110,7 +109,7 @@ class WorkshopTests(unittest.TestCase):
             out, err = io.StringIO(), io.StringIO()
             with patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], code, output)), \
                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                self.assertEqual(1, publisher.publish(self.package, "/fake/steamcmd", "test_account", "secret", ITEM, SHA))
+                self.assertEqual(1, publisher.publish(self.package, "/fake/steamcmd", "test_account", ITEM, SHA))
             self.assertNotIn(output, out.getvalue() + err.getvalue())
             self.assertNotIn("secret", out.getvalue() + err.getvalue())
 

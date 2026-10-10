@@ -1,4 +1,5 @@
-"""SteamCMD publisher. Authentication files remain in the private HOME volume."""
+"""SteamCMD publisher using Valve's saved-config, username-only login flow."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,16 @@ def quoted(value):
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def restore_config(runtime, encoded):
+    config = base64.b64decode(encoded, validate=True)
+    if not config or len(config) > 32768:
+        raise ValueError("A valid Steam login config is required")
+    config_path = runtime / "config/config.vdf"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_bytes(config)
+    config_path.chmod(0o600)
+
+
 def main():
     # SteamCMD stores config/ssfn state beside its executable, not only in ~/.steam.
     runtime = Path.home() / "steamcmd"
@@ -28,15 +39,15 @@ def main():
     if sys.argv[1:]:
         raise ValueError("Unsupported publisher argument")
     username = os.environ.get("STEAM_USERNAME", "")
-    password = os.environ.get("STEAM_PASSWORD", "")
+    restore_config(runtime, os.environ.get("STEAM_CONFIG_VDF", ""))
     item_id = os.environ.get("WORKSHOP_ID", "")
     sha = os.environ.get("SOURCE_SHA", "")
-    return publish(Path("/package"), steamcmd, username, password, item_id, sha)
+    return publish(Path("/package"), steamcmd, username, item_id, sha)
 
 
-def publish(package, steamcmd, username, password, item_id, sha):
-    if not username or not password:
-        raise ValueError("STEAM_USERNAME and STEAM_PASSWORD are required")
+def publish(package, steamcmd, username, item_id, sha):
+    if not username:
+        raise ValueError("STEAM_USERNAME is required")
     if not re.fullmatch(r"[1-9][0-9]{0,19}", item_id):
         raise ValueError("An existing Workshop item ID is required")
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
@@ -46,7 +57,7 @@ def publish(package, steamcmd, username, password, item_id, sha):
         raise ValueError("Package and target Workshop IDs differ")
     if not (package / "Contents/mods").is_dir() or not (package / "preview.png").is_file():
         raise ValueError("Incomplete Workshop package")
-    # Temporary files contain the password; never put it in process arguments or logs.
+    # Use Valve's remembered-login flow: supplying a password again can trigger Steam Guard.
     with tempfile.TemporaryDirectory(prefix="workshop-publish-") as directory:
         vdf = Path(directory) / "workshop.vdf"
         vdf.write_text('"workshopitem"\n{\n' + "\n".join(
@@ -61,7 +72,7 @@ def publish(package, steamcmd, username, password, item_id, sha):
         commands.write_text(
             "@ShutdownOnFailedCommand 1\n"
             "@NoPromptForPassword 1\n"
-            "login " + quoted(username) + " " + quoted(password) + "\n"
+            "login " + quoted(username) + "\n"
             "workshop_build_item " + quoted(str(vdf)) + "\nquit\n", encoding="utf-8")
         commands.chmod(0o600)
         # Steam logs can contain account/session details. Do not print or upload them.
@@ -78,7 +89,7 @@ def publish(package, steamcmd, username, password, item_id, sha):
         if result.returncode != 0 or not success:
             print("SteamCMD did not confirm publication. Check item ownership/game access, "
                   "Steam Guard session, accepted Workshop terms, and Steam connectivity. "
-                  "Re-bootstrap login interactively if Steam requests authentication.", file=sys.stderr)
+                  "Refresh STEAM_CONFIG_VDF with an interactive login if Steam requests authentication.", file=sys.stderr)
             return 1
         print("Published Workshop item " + item_id + " from commit " + sha)
         return 0
