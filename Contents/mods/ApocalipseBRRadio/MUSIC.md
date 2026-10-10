@@ -1,5 +1,86 @@
 # Music contract (framework v2.3.0)
 
+## RCON jukebox
+
+Enable `ApocalipseBrRCONextension` on server and clients to receive requests.
+The radio subscribes to `Jukebox.Queue` using the same extension API as the
+Furniture and Animals mods. The transport is optional; ordinary radio playback
+still works without the extension. Its client relay requires a connected client.
+
+```text
+servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-001##my_music##Alice##mypack_song01##This one is for the survivors!
+servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-002##my_music##Alice##mypack_song01,mypack_song02##Enjoy the playlist!
+```
+
+Payload: `stationId##playerName##songId[,songId...]##message`. Use catalog IDs,
+not titles or sound paths. Message may be empty (keep the final separator), and
+may contain `##`; station and player names cannot contain the separator. Player
+name is the supplied attribution, and need not be online. Use a new request ID
+for each request; the extension suppresses duplicate relays for one hour.
+
+Requests append atomically to a FIFO queue per enabled station: up to 25 songs
+per command and 100 pending songs per station. Unknown songs, songs from another
+station, malformed lists, oversized names/messages, control characters, and radio
+markup are rejected with a server log. Names are limited to 64 bytes and messages
+to 240 bytes. Repeated songs are allowed. Queues are held in memory and reset
+on restart. Current music and normal announcer segments finish; requests replace
+random song selection until the queue drains. Channel arbitration still applies,
+and a request is removed only after music acquires the channel.
+
+Each command produces two radio lines: a compact request/batch announcement with
+the next queued song and optional player message, then the number of songs queued
+after that song. A batch does not announce every title. Counts are snapshots at
+acceptance, excluding the currently airing song. Lines are spaced by at least
+three real seconds and sent on music-owned station checks; they wait while text
+owns the channel. Playback heartbeats remain independent. The copy uses
+`RD_ABR_Jukebox_*_{EN,PTBR}` in both RadioData dictionaries and the server's
+broadcast language option.
+
+An empty message queues songs without storing a listener message. Each non-empty
+command stores its player attribution and message once, even for a song list.
+In addition to the initial request announcement, the station repeats that message
+after each of the next five songs, using the translated listener-message
+introduction `RD_ABR_Jukebox_Dedication_{EN,PTBR}`. A song already airing when the
+command arrives does not count. Ordinary announcer segments do not count either.
+All active messages air once per eligible song break, at least three seconds
+apart, before the normal announcer or next song; the end pause extends as needed.
+Each message expires after five successful repeat broadcasts. Messages remain
+station-specific, reset on restart, and are capped at 100 active messages per
+station. Failed commands store nothing.
+
+## External announcer message queue
+
+AI agents and other external tools can supply a separate FIFO of radio voice
+messages, without a player name or song requests:
+
+```text
+servermsg ##APOCBR_RCON##Radio##QueueAnnouncer##unique-voice-001##my_music##Good evening, survivors.##Keep your radios tuned for more music.
+```
+
+Payload: `stationId##message1[##message2...]`. Each message is one future
+between-song broadcast; sequence order is preserved across commands. Commas and
+pipes are literal text; `##` is reserved as the message separator. This hook is
+`Radio.QueueAnnouncer`, distinct from `Jukebox.Queue`. The server Lua API is
+`ABRRadioMusicServer.queueAnnouncerMessages(stationId, messages)`.
+
+At each song completion, one pending announcer message replaces the station's
+normal catalog talk segment. Active player dedications still air first, once per
+eligible break under their five-repeat lifecycle. Announcer messages play once,
+have no player attribution, and never enter the song, request-announcement, or
+dedication queues. The next song waits until the messages and their reading pause
+finish; existing music end heartbeats continue. Without queued announcer copy,
+the normal catalog talk resumes. Stations without catalog talk can also use this
+queue. Commands received after a break begins apply at the next song completion.
+
+Up to 25 messages per command, 100 pending per station, and 480 UTF-8 bytes per
+message are accepted. Validation rejects the whole batch if any message is empty,
+too long, contains control characters/radio markup, or targets an unknown/disabled
+station. Messages are removed only after the radio transmission succeeds and
+remain queued if the channel is busy or the radio is unavailable. Queues reset
+on restart. Copy is broadcast verbatim in the language supplied by the agent;
+it is dynamic content, not a built-in translation label. No audio/TTS is generated
+by this hook.
+
 ApocalipseBRRadio owns the shared music registry/protocol, real-time server
 scheduler, client audio, and channel arbitration. Content packs supply
 stations, songs, timed talk, sound definitions, and audio assets. The framework
@@ -11,7 +92,7 @@ require "ApocalipseBRRadio/ABRRadioMusic"
 ABRRadio.registerMusicStation({
     id = "my_music", frequency = 94200,
     name = { EN = "My music station", PTBR = "Minha radio musical" },
-    talkChance = 35,
+    talkChance = 100,
 })
 
 ABRRadio.registerSong({
@@ -30,6 +111,8 @@ ABRRadio.registerMusicTalk({
 IDs are stable, unique catalog codes (1-24 ASCII alphanumeric/underscore/hyphen
 characters), not array indices. Duration and timestamps use real seconds.
 Default weight is 10; song repetition is avoided when more than one is available.
+Stations with talk entries always play one announcer segment between songs;
+`talkChance` remains accepted for older packs but no longer skips those transitions.
 Song lyrics are not supported. Legacy song `lyrics`, `lyricDuration`, and `lines`
 fields are discarded during registration. Timed talk lines are sent by the
 authority as ordinary radio text on the first station check within their active
@@ -70,12 +153,19 @@ Clients do not report listeners or acknowledge heartbeats.
 
 On its first check at or after the registered song duration, the authority sends
 an end heartbeat. Clients
-fade remaining audio to zero over two real seconds, then stop and return the
-emitter. Repeated end heartbeats cannot restart the song. The channel stays owned
+lower remaining audio to 50% of the current radio volume over 100 client frames,
+then hold that tail under announcer speech. A `transition` phase begins near the
+server song deadline; `end` preserves any remaining tail, including a late
+listener's unfinished song. When the next track starts at 50% gain, its volume
+rises to the radio setting over 50 frames while the tail fades to zero over the
+same 50 frames. Repeated end heartbeats cannot restart the song. The channel stays owned
 for a random, inclusive 0-5 real seconds after the song ends. A zero-second
 pause releases ownership in the completion check; positive pauses release it at
 the first check after their deadline. The same check attempts the next segment,
-with queued radio text retaining priority. Only then are
+with queued radio text retaining priority. When announcer content exists, its
+segment starts immediately after song completion without a random pause. Its
+last line gets up to two seconds before the next song announcement, whose wait
+is shortened to 0.5 seconds. Only then are
 queued text, timed talk, and the next song eligible. Every registered music
 station uses this lifecycle independently.
 
@@ -88,38 +178,44 @@ the same broadcast. Server heartbeats identify the active transmission and its
 lifecycle; each receiver starts its own audio at zero. Repeated callbacks for
 the same receiver do not restart audio.
 
-Speaker playback is 3D: placed radios emit from their tile center, equipped
-portable radios follow their owner, and vehicle radios follow their vehicle.
-FMOD handles direction, distance attenuation, and occlusion. Gain uses the
-receiver's `getDeviceVolume()` directly, without a second Lua distance fade.
-Headphones remain owner-only, non-spatial playback.
+Radio music uses non-spatial (2D) playback so cars, placed radios, and portable
+speakers use the same volume curve without game directional panning. Existing
+audio files retain their authored stereo channels; this does not downmix assets.
+Playback activates and stays eligible within 200 yards (182.88 tiles,
+approximating one tile as one metre). Audible propagation is a separate maximum
+of 100 yards at full radio volume: 50% reaches 50 yards and 25% reaches 25 yards.
+The full-gain reference distance scales from 10 tiles at full volume. Outside
+that reference distance, the clamped linear distance factor is squared for a
+steeper falloff. A powered, tuned receiver between its audible radius and the
+200-yard lifetime cutoff starts/continues at zero gain, so approaching the radio
+reveals the same track without restarting. Lower volumes shrink the attenuation
+zone and make the gain drop more rapidly per tile. Headphones bypass propagation
+attenuation; their gain still follows radio volume. Vertical distance
+retains its three-tile weight per floor. For multiple local players, the nearest
+eligible listener determines gain. Headphones remain owner-only at full distance
+gain. Final gain is radio volume times transition gain times distance gain; FMOD
+spatial attenuation/occlusion is disabled to avoid applying a second curve.
 
-Content sound definitions must use `is3D = true` and explicit clip attenuation
-distances (the importer supplies `distanceMin = 1`, `distanceMax = 20`). Older
-generated definitions using `is3D = false` need updating for native attenuation
-and occlusion. The sound script defines FMOD's attenuation curve. The Lua
-playback lifetime uses a fixed 200-yard listener radius (182.88 tiles, assuming
-roughly one metre per tile), independent of radio volume/type. Vertical
-separation retains the three-tile weight per floor. Walking beyond this radius
-releases the emitter; returning starts the current song at its beginning.
-Within this radius, FMOD can still attenuate the sound to silence according to
-its clip settings. Headphones remain owner-only. Bounded discovery checks the
-full registered receiver list (`ZomboidRadio.getDevices()`), including one-way
-radios, and applies cached music state independently of the microphone guard's
-small neighbourhood. Radios must be loaded on the client to be discovered.
+The Music Pack generator uses `is3D = false`, `distanceMin = 10`, and
+`distanceMax = 128`; its distance fields are reference metadata for 2D playback.
+The shared `LISTEN_RANGE` controls the fixed 200-yard activation/lifetime
+cutoff. `PROPAGATION_RANGE`, `FULL_VOLUME_RANGE`, and `DISTANCE_FALLOFF_POWER`
+control audible gain: propagation uses `PROPAGATION_RANGE * radioVolume`.
+Discovery checks the full registered receiver list including
+one-way radios. Radios must be loaded on the client to be discovered.
 
 Power off, mute, retuning, recorded-media playback, blocked reception,
 unequipping/transferring a portable radio, picking up/removing a placed radio,
 uninstalling/removing a vehicle radio stop and release the owned emitter
-immediately. Song end, a replacement transmission, and missing heartbeats fade
-the remaining audio before release. Losing heartbeats uses a timeout of three
+immediately. Song end/replacement preserves the outgoing tail for the next track's crossfade.
+Explicit server stop and missing heartbeats fade to zero over two seconds. Losing heartbeats uses a timeout of three
 complete scans at the target tick rate, with an eight-second minimum, followed
 by the two-second fade. Both authority and receivers use the same station
 registration list to compute this allowance. At one station the timeout is 15.3
 seconds; it grows with station count. Sustained tick rates substantially below
 the target can still cause expiry. End heartbeats repeat during the pause
 so a lost end packet can be recovered on the next heartbeat. A replacement song
-waits for outgoing audio to finish fading before starting at zero. Local time is
+starts at half gain while outgoing audio crossfades to zero. Local time is
 used only for chunk sequencing, fades, retries, and heartbeat expiry.
 
 Playback handles must be positive: a zero or negative result releases the failed
@@ -180,11 +276,11 @@ not collide with a vanilla station or another mod's broadcaster.
 - Listener: `common/media/lua/client/ApocalipseBRRadio/ABRRadioMusicClient.lua`.
 - Ownership and text scheduling: `ABRRadioServer.lua`.
 
-Server commands carry `id`, `sequence`, and `phase` (`announce`, `play`, or
-`end`). Sequence and phase ordering reject delayed packets that would revive an
+Server commands carry `id`, `sequence`, and `phase` (`announce`, `play`,
+`transition`, `end`, or `stop`). Sequence and phase ordering reject delayed packets that would revive an
 ended transmission. There are no elapsed-time, remaining-time, duration,
-audio-path, or lyric fields in the metadata. The initial announcement sends the
-resolved title/artist as radio text. Lifecycle heartbeats contain no visible
+audio-path, or lyric fields in the metadata. Only the server sends song title/artist text, once per airing at announcement.
+Clients do not synthesize captions on discovery or recovery. Lifecycle heartbeats contain no visible
 text. Timed talk is sent separately as ordinary radio text. Playback is filtered
 by tuning, power, volume, position, and listener hearing. The legacy
 `AMP2|content_id|sequence|phase` decoder remains for old radio events; new servers
@@ -220,3 +316,58 @@ Client diagnostics use `[ABRRadio Music Client] Received` for control phase
 changes and `Audio started` when FMOD returns a positive handle. Missing catalog
 entries and failed sound starts identify the content/sound ID. These diagnostics
 do not prove the local audio is audible; receiver volume and proximity still apply.
+
+The 100/50-frame ramps advance once per client OnTick, so wall-clock duration
+varies with client FPS. Playback is not kept running when a radio is powered off
+or muted, and the game soundtrack volume is not modified. Only an outgoing
+transition tail and its incoming song temporarily overlap per receiver.
+
+MusicState heartbeats are sent to every connected client through the mod's
+server-command channel, without a player-to-radio network relevance radius.
+Activation still requires a registered receiver loaded on that client and a
+listener within the 182.88-tile playback cutoff. The non-spatial emitter uses a separate Lua attenuation curve out to at most
+100 yards, while keeping playback alive out to 200 yards.
+The Music Pack records 10/128-tile clip distances for consistency. Vanilla announcer text uses the radio's own text/signal range and
+is not needed to trigger music playback. Client chunk loading may limit which world receivers can be discovered
+before the 200-yard cutoff.
+
+While receiver state is retained, duplicate heartbeats never reset the playback
+handle, local start time, or fade-in progress. A heartbeat timeout fades audio
+and marks that airing expired; recovery packets for the same sequence refresh
+metadata but do not replay it. A new server sequence can start normally. Receiver
+removal, retuning, power-off, mute, and leaving range still release state, so
+later listening starts at the beginning as before. Replaced DeviceData settles
+into one new receiver state. Client logs include airing sequence and receiver
+identity; release reasons distinguish eligibility loss from heartbeat expiry.
+
+Speaker profiles use `DeviceData.getBaseVolumeRange()` as the native hardware
+rating, before slider and location effects. Vehicle radios inherit this rating
+from the installed inventory item. A rating of 15 is the full-strength reference;
+ratings above 15 are capped. Portable speakers receive an additional 0.6 scale;
+vehicle and stationary scales default to 1. The portable/two-way flags identify
+hand radios versus walkie-talkies, while `getVehicle` identifies vehicle parts.
+RF transmit range is not used as a speaker metric.
+
+`strength = clamp(baseVolumeRange / 15, 0, 1) * categoryScale`, capped at 1.
+Audible range is `100 yards * radioVolume * strength`, inner reference range is
+`10 tiles * radioVolume * strength`, and final gain is
+`radioVolume * strength * distanceFalloff^2 * transitionGain`. Native rating zero
+makes speakers silent without dividing by zero. Headphones bypass speaker and
+propagation modifiers. Playback activation/lifetime remains 200 yards. Defaults
+are configurable through `SPEAKER_REFERENCE_RANGE`, `PORTABLE_SPEAKER_SCALE`,
+`VEHICLE_SPEAKER_SCALE`, and `STATIONARY_SPEAKER_SCALE` in the shared module.
+Audio-start logs include device category and computed speaker strength.
+
+For an effective nominal propagation radius above 60 yards, attenuation progress
+is multiplied by 1.2 before the existing squared falloff. Every speaker profile
+also receives a universal 1.3 multiplier, giving a combined 1.56 rate above
+60 yards and a 1.3 rate at or below 60 yards. The nominal radius
+and inner reference distance are not expanded to compensate, so silence occurs
+sooner: `inner + (nominalRadius - inner) / combinedRate`. A full-strength 100-yard
+profile reaches zero near 68 yards. Smaller profiles also become silent sooner
+through the universal multiplier; ranges are not expanded to compensate. The threshold is evaluated after radio volume and hardware modifiers,
+with a small floating-point tolerance at exactly 60 yards. Playback activation
+and lifetime remain 200 yards. Transition gain is a separate multiplier: the
+100-frame reduction to 50% halves the already hardware/distance-adjusted output
+without changing the audible-radius calculation. Tuning constants are
+`FASTER_FALLOFF_THRESHOLD`, `LONG_RANGE_FALLOFF_RATE`, and `GLOBAL_FALLOFF_RATE`.

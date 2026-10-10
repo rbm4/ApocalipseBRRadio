@@ -4,12 +4,11 @@ require "ApocalipseBRRadio/ABRRadioMusic"
 ABRRadioMusicClient = { devices = {}, fading = {}, muted = {}, clock = 0,
     stations = {}, packetVersion = 0 }
 local C, M = ABRRadioMusicClient, ABRRadio.music
-local phaseOrder = { announce = 1, play = 2, ["end"] = 3 }
+local phaseOrder = { announce = 1, play = 2, transition = 3, ["end"] = 4, stop = 5 }
 local musicFrequencies, stationCount = {}, 0
 local worldCursor, inventoryCursors, squareCursors = 0, {}, {}
 local SCAN_BUDGET = 8
--- Approximate one map tile as one metre: 200 yards = 182.88 metres.
-local MUSIC_RANGE = 200 * 0.9144
+local MUSIC_RANGE = M.LISTEN_RANGE
 
 local function refreshFrequencies()
     -- Registrations are append-only; no station traversal on ordinary ticks.
@@ -147,14 +146,23 @@ local function stop(state)
     state.spatial, state.volume = nil, nil
 end
 
-local function fade(device, state)
+local function fade(device, state, mode)
     state.ended = true
-    if not state.emitter then return end
+    if not state.emitter then
+        local tail = C.fading[device]
+        if mode == "stop" and tail then
+            tail.mode, tail.startedAt, tail.fromGain = "stop", C.clock, tail.gain
+        end
+        return
+    end
     if not state.handle then stop(state); return end
     if C.fading[device] then stop(C.fading[device]) end
     C.fading[device] = {
         emitter = state.emitter, handle = state.handle, data = state.data,
-        station = state.entry.station, startedAt = C.clock,
+        station = state.entry.station, startedAt = C.clock, receivedAt = C.clock,
+        mode = mode or "hold", frames = state.transitionFrames or 0,
+        fromGain = state.transitionFrom or state.gain or 0.5,
+        gain = state.gain or 0.5,
     }
     state.emitter, state.handle = nil, nil
 end
@@ -176,8 +184,16 @@ local function position(device)
     return device:getX() + 0.5, device:getY() + 0.5, device:getZ(), nil
 end
 
-local function headphones(device, data)
-    return device.getPlayer and data:getHeadphoneType() >= 0
+local function speakerProfile(device, data)
+    local category, scale = "stationary", M.STATIONARY_SPEAKER_SCALE
+    if device.getVehicle then
+        category, scale = "vehicle", M.VEHICLE_SPEAKER_SCALE
+    elseif data:getIsPortable() then
+        category = data:getIsTwoWay() and "walkie_talkie" or "hand_radio"
+        scale = M.PORTABLE_SPEAKER_SCALE
+    end
+    local strength = math.min(1, math.max(0, data:getBaseVolumeRange() / M.SPEAKER_REFERENCE_RANGE)) * scale
+    return math.min(1, strength), category
 end
 
 local function audible(device, data)
@@ -186,17 +202,37 @@ local function audible(device, data)
     local x, y, z, owner = position(device)
     if not x then return false end
     local range = MUSIC_RANGE
+    -- Audible propagation shrinks with volume; receiver lifetime stays fixed.
+    local level = math.min(1, math.max(0, data:getDeviceVolume()))
+    local strength = speakerProfile(device, data)
+    local propagationRange = M.PROPAGATION_RANGE * level * strength
+    local fullVolumeRange = M.FULL_VOLUME_RANGE * level * strength
+    local falloffRate = M.GLOBAL_FALLOFF_RATE
+        * (propagationRange > M.FASTER_FALLOFF_THRESHOLD + 0.000001
+            and M.LONG_RANGE_FALLOFF_RATE or 1)
+    local nearestGain
     for i = 0, getNumActivePlayers() - 1 do
         local player = getSpecificPlayer(i)
         if player and not player:isDead() and not player:hasTrait(CharacterTrait.DEAF) then
             if owner and data:getHeadphoneType() >= 0 then
-                if player == owner then return true, x, y, z end
-            elseif (player:getX() - x)^2 + (player:getY() - y)^2
-                + ((player:getZ() - z) * 3)^2 <= range^2 then
-                return true, x, y, z
+                if player == owner then return true, x, y, z, 1 end
+            else
+                local distanceSquared = (player:getX() - x)^2 + (player:getY() - y)^2
+                    + ((player:getZ() - z) * 3)^2
+                if distanceSquared <= range^2 then
+                    local falloff = 0
+                    if propagationRange > 0 then
+                        local progress = (math.sqrt(distanceSquared) - fullVolumeRange)
+                            / (propagationRange - fullVolumeRange)
+                        falloff = math.min(1, math.max(0, 1 - progress * falloffRate))
+                    end
+                    local gain = strength * falloff ^ M.DISTANCE_FALLOFF_POWER
+                    nearestGain = math.max(nearestGain or 0, gain)
+                end
             end
         end
     end
+    if nearestGain ~= nil then return true, x, y, z, nearestGain end
     return false
 end
 
@@ -211,23 +247,27 @@ local function onDeviceText(guid, codes, x, y, z, text, device, skipProtection)
     if not skipProtection then protect(device, device.getPlayer ~= nil) end
     if not station or not data or data:getChannel() ~= station.frequency or not audible(device, data) then return end
     local state = C.devices[device]
+    if C.fading[device] then C.fading[device].receivedAt = C.clock end
     if state and sequence < state.sequence then return end
     if state and sequence == state.sequence then
         if state.entry.id ~= id or phaseOrder[phase] < phaseOrder[state.phase] then return end
     end
-    if not state or state.sequence ~= sequence then
+    if not state or state.sequence ~= sequence or state.data ~= data then
         if state then
             if state.data == data then fade(device, state) else stop(state) end
         end
-        state = { entry = entry, sequence = sequence, data = data, chunk = 0,
-            captionShown = phase == "announce" }
+        state = { entry = entry, sequence = sequence, data = data, chunk = 0 }
         C.devices[device] = state
     end
     -- A late receiver starts at the beginning. End metadata or heartbeat loss
     -- ends playback; the client does not estimate a song's remaining duration.
     state.phase = phase
     state.receivedAt = C.clock
+    if phase == "transition" and not state.transitionFrames then
+        state.transitionFrames, state.transitionFrom = 0, state.gain or 0.5
+    end
     if phase == "end" then fade(device, state) end
+    if phase == "stop" then fade(device, state, "stop") end
 end
 
 function C.applyState(device)
@@ -274,22 +314,14 @@ function C.receiveState(packet)
     for device in pairs(C.muted) do C.applyState(device) end
 end
 
-local function displayCaption(device, state)
-    if state.entry.kind == "song" and not state.captionShown then
-        state.captionShown = true
-        local caption = M.caption(state.entry)
-        local color = M.stations[state.entry.station].color
-        if caption ~= "" then device:AddDeviceText(caption, color.r, color.g, color.b, "", nil, -1) end
-    end
-end
-
 local function play(device, state, elapsed)
-    if state.entry.kind ~= "song" or C.fading[device]
+    if state.entry.kind ~= "song" or (C.fading[device] and C.fading[device].mode == "stop")
         or (state.retryAt and C.clock < state.retryAt) then return end
     local entry = state.entry
     -- Prefer a whole-file sound. Legacy chunk-only catalogs start at chunk one
     -- and advance on this receiver's own playback clock.
     local chunks = not entry.sound and entry.chunks
+    if not chunks and state.handle then return end -- same airing never restarts on heartbeat
     local index = chunks and M.chunkIndex(entry, elapsed) or 1
     if index == 0 or index <= state.chunk then return end
     if state.handle then
@@ -320,21 +352,31 @@ local function play(device, state, elapsed)
     state.handle, state.chunk, state.retryAt = handle, index, nil
     state.spatial, state.volume = nil, nil
     state.startedAt = state.startedAt or C.clock
+    if not state.fadeInFrames then
+        state.fadeInFrames = 0
+        state.emitter:setVolume(handle, device:getDeviceData():getDeviceVolume() * 0.5)
+        local tail = C.fading[device]
+        if tail then
+            tail.mode, tail.frames, tail.fromGain = "crossfade", 0, tail.gain
+        end
+    end
+    local strength, category = speakerProfile(device, device:getDeviceData())
     print("[ABRRadio Music Client] Audio started: " .. state.entry.station
-        .. "; content=" .. state.entry.id .. "; sound=" .. sound)
+        .. "; content=" .. state.entry.id .. "; sequence=" .. state.sequence
+        .. "; receiver=" .. tostring(device) .. "; device=" .. category
+        .. "; speaker_strength=" .. string.format("%.2f", strength) .. "; sound=" .. sound)
 end
 
-local function updateAudio(device, state, data, gain, x, y, z)
+local function updateAudio(device, state, data, gain, x, y, z, distanceGain)
     state.emitter:setPos(x, y, z)
     if state.handle then
-        local spatial = not headphones(device, data)
+        local spatial = false
         if state.spatial ~= spatial then
             state.emitter:set3D(state.handle, spatial)
             state.spatial = spatial
         end
-        -- FMOD owns spatial attenuation/panning/occlusion; the fade multiplies
-        -- the receiver's current volume, without another distance attenuation.
-        local volume = data:getDeviceVolume() * gain
+        -- Centered playback uses the same distance curve for cars/world radios.
+        local volume = data:getDeviceVolume() * gain * distanceGain
         if state.volume ~= volume then
             state.emitter:setVolume(state.handle, volume)
             state.volume = volume
@@ -350,17 +392,31 @@ local function tick()
     local heartbeatTimeout = M.getHeartbeatTimeout()
     for device, tail in pairs(C.fading) do
         local data = device:getDeviceData()
-        local gain = math.max(0, 1 - (C.clock - tail.startedAt) / M.FADE_DURATION)
-        local canHear, x, y, z
+        tail.frames = tail.frames + 1
+        local gain
+        if tail.mode == "hold" then
+            gain = tail.fromGain + (0.5 - tail.fromGain) * math.min(1, tail.frames / M.FADE_OUT_FRAMES)
+        elseif tail.mode == "crossfade" then
+            gain = tail.fromGain * math.max(0, 1 - tail.frames / M.FADE_IN_FRAMES)
+        else
+            gain = tail.fromGain * math.max(0, 1 - (C.clock - tail.startedAt) / M.FADE_DURATION)
+        end
+        tail.gain = gain
+        local packet = C.stations[M.stations[tail.station].frequency]
+        local lastReceived = packet and packet.receivedAt or tail.receivedAt
+        if tail.mode == "hold" and C.clock - lastReceived > heartbeatTimeout then
+            tail.mode, tail.startedAt, tail.fromGain = "stop", C.clock, gain
+        end
+        local canHear, x, y, z, distanceGain
         if data and data == tail.data and data:getChannel() == M.stations[tail.station].frequency then
-            canHear, x, y, z = audible(device, data)
+            canHear, x, y, z, distanceGain = audible(device, data)
         end
         if not data or data ~= tail.data or data:getChannel() ~= M.stations[tail.station].frequency
             or not canHear then
             stop(tail)
             C.fading[device] = nil
         else
-            updateAudio(device, tail, data, gain, x, y, z)
+            updateAudio(device, tail, data, gain, x, y, z, distanceGain)
             if gain == 0 then
                 stop(tail)
                 C.fading[device] = nil
@@ -370,25 +426,50 @@ local function tick()
     for device, state in pairs(C.devices) do
         local data = device:getDeviceData()
         local age = C.clock - state.receivedAt
-        local canHear, x, y, z
+        local canHear, x, y, z, distanceGain
         if data and data == state.data and data:getChannel() == M.stations[state.entry.station].frequency then
-            canHear, x, y, z = audible(device, data)
+            canHear, x, y, z, distanceGain = audible(device, data)
         end
         if not data or data ~= state.data
             or data:getChannel() ~= M.stations[state.entry.station].frequency
             or not canHear then
+            if state.handle then
+                local reason = "out_of_range_or_unavailable"
+                if not data or data ~= state.data then reason = "receiver_changed"
+                elseif data:getChannel() ~= M.stations[state.entry.station].frequency then reason = "retuned"
+                elseif not data:getIsTurnedOn() then reason = "powered_off"
+                elseif data:getDeviceVolume() <= 0 then reason = "muted"
+                elseif data:isPlayingMedia() then reason = "recorded_media"
+                elseif data:isNoTransmit() then reason = "reception_blocked" end
+                print("[ABRRadio Music Client] Released: " .. state.entry.station
+                    .. "; content=" .. state.entry.id .. "; sequence=" .. state.sequence
+                    .. "; receiver=" .. tostring(device) .. "; reason=" .. reason)
+            end
             stop(state)
             C.devices[device] = nil
         else
-            if age > heartbeatTimeout then
-                fade(device, state)
-                C.devices[device] = nil
-            elseif state.phase == "play" and not state.ended then
+            if age > heartbeatTimeout and not state.expired then
+                fade(device, state, "stop")
+                state.expired = true
+                print("[ABRRadio Music Client] Heartbeat expired: " .. state.entry.station
+                    .. "; content=" .. state.entry.id .. "; sequence=" .. state.sequence)
+            elseif (state.phase == "play" or state.phase == "transition") and not state.ended then
                 if state.entry.kind == "song" then
                     local localElapsed = state.startedAt and (C.clock - state.startedAt) or 0
                     play(device, state, localElapsed)
-                    if state.startedAt then displayCaption(device, state) end
-                    if state.emitter then updateAudio(device, state, data, 1, x, y, z) end
+                    if state.emitter then
+                        local gain
+                        if state.phase == "transition" then
+                            state.transitionFrames = (state.transitionFrames or 0) + 1
+                            gain = state.transitionFrom + (0.5 - state.transitionFrom)
+                                * math.min(1, state.transitionFrames / M.FADE_OUT_FRAMES)
+                        else
+                            gain = 0.5 + 0.5 * math.min(1, (state.fadeInFrames or 0) / M.FADE_IN_FRAMES)
+                            state.fadeInFrames = (state.fadeInFrames or 0) + 1
+                        end
+                        state.gain = gain
+                        updateAudio(device, state, data, gain, x, y, z, distanceGain)
+                    end
                 end
             end
         end

@@ -49,6 +49,14 @@ for languageId, language in ipairs({"EN", "PTBR"}) do
     assert(#ABRRadio.transmissions.occ_apocalipse == 15)
     assert(ABRRadio.transmissions.occ_apocalipse[1].lines[1] ==
         RadioTranslationCatalog["RD_ABR_occ_apocalipse_occ_01_Line01_" .. language])
+    for key, args in pairs({ Queued = { "Alice", "Song" },
+        BatchQueued = { "Alice", 3, "Song" }, Message = { "Alice", "Hello" },
+        Dedication = { "Alice", "Hello" }, Remaining = { 2 } }) do
+        local text = ABRRadio.resolveRegisteredLabel("RD_ABR_Jukebox_" .. key, args)
+        assert(text == getText("RD_ABR_Jukebox_" .. key .. "_" .. language, unpack(args)))
+        assert(not text:find("RD_ABR_", 1, true) and not text:find("%%[1-9]"),
+            "Unresolved jukebox translation or placeholder: " .. text)
+    end
 end
 
 -- Normal generated keys and explicit keys must both fall back and format args.
