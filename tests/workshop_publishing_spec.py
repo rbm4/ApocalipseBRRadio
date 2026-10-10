@@ -102,10 +102,27 @@ class WorkshopTests(unittest.TestCase):
         self.assertNotIn("test_account", out.getvalue())
         self.assertTrue(all(not path.exists() for path in command_paths))
 
+    def test_existing_item_commit_confirmation_succeeds(self):
+        self.staged()
+        for output in [
+            "Preparing update...Uploading content...Committing update...Success.\nquit\n",
+            "Committing update...\r\nSuccess.\r\n",
+            "Committing update...\x1b[0mSuccess.\x1b[0m\nquit\n",
+        ]:
+            with self.subTest(output=output), \
+                    patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, publisher.publish(self.package, "/fake/steamcmd", "test_account", ITEM, SHA))
+
     def test_zero_exit_without_expected_publication_fails_and_hides_raw_output(self):
         self.staged()
         for code, output in [(0, "ERROR: password secret"), (1, "Success. Published Item " + ITEM),
-                             (0, "Success. Published Item 3781972601")]:
+                             (0, "Success. Published Item 3781972601"),
+                             (0, "Success.\n"),
+                             (0, "Uploading content...Success.\n"),
+                             (0, "Committing update...ERROR! Failed to update workshop item.\nSuccess.\n"),
+                             (0, "Committing update...Success. Created new item, PublishedFileId 3781972601\n"),
+                             (1, "Committing update...Success.\n")]:
             out, err = io.StringIO(), io.StringIO()
             with patch.object(publisher.subprocess, "run", return_value=subprocess.CompletedProcess([], code, output)), \
                     contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
