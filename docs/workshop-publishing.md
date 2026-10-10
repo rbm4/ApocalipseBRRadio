@@ -1,3 +1,5 @@
+Publishing now requires the [home WireGuard VPN setup](home-vpn-publishing.md). SteamCMD runs through your home IPv4; GitHub API and restart requests stay on the hosted runner.
+
 # Automatic Steam Workshop publishing
 
 `.github/workflows/steam-workshop.yml` packages this Build 42 mod on pull requests
@@ -32,6 +34,7 @@ and grant **ApocalipseBRRadio** access with the selected-repositories policy:
 
 | Secret | Value and where to get it |
 | --- | --- |
+| `WORKSHOP_WIREGUARD_CONFIG` | Base64 client configuration generated on your home WSL2 host. See [home VPN setup](home-vpn-publishing.md). |
 | `STEAM_USERNAME` | The Steam **account login name** for the account that owns Workshop item 3706460551. It is not the profile/display name or SteamID. |
 | `STEAM_PASSWORD` | That account's password, used only when remembered login cannot be confirmed. Add this to enable fresh login with mobile approval. Without it, failed remembered login stops before publication. |
 | `STEAM_CONFIG_VDF` | Base64 of `config/config.vdf` from a successful interactive SteamCMD login for the same account. See bootstrap below. Contains sensitive remembered-login state. |
@@ -102,7 +105,7 @@ On a trusted local machine with Docker and `gh`, check out the repository and ru
 
 ```sh
 docker build -t pz-workshop-publisher docker/workshop
-docker run -it --name pz-steam-bootstrap pz-workshop-publisher login
+docker run -it --user steam --entrypoint python3 --name pz-steam-bootstrap pz-workshop-publisher /opt/publish.py login
 ```
 
 At the `Steam>` prompt enter `login YOUR_STEAM_LOGIN_NAME`, supply the password
@@ -222,6 +225,7 @@ jobs:
       build-mode: pzstudio
       project-directory: '.'
     secrets:
+      WORKSHOP_WIREGUARD_CONFIG: ${{ secrets.WORKSHOP_WIREGUARD_CONFIG }}
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
       STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
       STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}

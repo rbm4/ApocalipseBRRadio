@@ -19,6 +19,7 @@ jobs:
       project-directory: '.'
       test-command: npm ci && npm test
     secrets:
+      WORKSHOP_WIREGUARD_CONFIG: ${{ secrets.WORKSHOP_WIREGUARD_CONFIG }}
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
       STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
       STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
