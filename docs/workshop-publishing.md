@@ -91,6 +91,24 @@ disable Guard or extract mobile-authenticator keys.
 
 ## Failure handling
 
+After confirmed Steam publication, the workflow calls pzmanager's dedicated
+`POST /api/server/mod-update/restart` endpoint with the player message
+`Restart para update de mods`. Deploy the pzmanager integration endpoint first.
+Add organization secrets `PZMANAGER_RESTART_URL` (the full HTTPS endpoint URL)
+and `PZMANAGER_MOD_UPDATE_TOKEN` (a newly generated random token, also configured
+as the backend environment variable of the same name). Grant both secrets to
+each publishing repository and explicitly pass them in reusable-workflow callers,
+alongside the Steam secrets. No integration secrets are needed by PR checks.
+
+Configuration is checked before publishing. The API call runs only after the
+Steam publish step succeeds, accepts 202/`accepted` or 200/`already_in_progress`,
+and refuses redirects. Concurrent mod updates share the backend's active restart
+countdown without resetting it. The backend warns all enabled game servers for
+10 minutes with the supplied message. If the API call fails, the workflow fails
+but the Steam update remains published; retry the restart separately. The hook
+does not retry or publish again automatically. The publishing runner must be
+able to reach the backend over HTTPS.
+
 Missing secrets fail before launching the container. A missing state volume
 reports bootstrap instructions. SteamCMD has a 20-minute timeout and the publish
 job a 30-minute limit. Both its exit status and explicit successful publication of
@@ -135,6 +153,8 @@ jobs:
     secrets:
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
       STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+      PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
+      PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
 ```
 
 Add the same triggers targeting master and contents: read permission as the radio

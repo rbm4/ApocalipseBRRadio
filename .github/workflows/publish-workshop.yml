@@ -21,6 +21,10 @@ on:
         required: false
       STEAM_PASSWORD:
         required: false
+      PZMANAGER_RESTART_URL:
+        required: false
+      PZMANAGER_MOD_UPDATE_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -65,7 +69,7 @@ jobs:
           WORKSHOP_ID: ${{ inputs.workshop-id }}
         run: bash .workshop-tools/scripts/workshop/package.sh
       - name: Check packaging and publisher behavior without Steam access
-        run: python3 -m unittest discover -s .workshop-tools/tests -p workshop_publishing_spec.py
+        run: python3 -m unittest discover -s .workshop-tools/tests -p 'workshop*_spec.py'
       - name: Validate publisher container build
         run: docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
       - name: Save Workshop package
@@ -98,6 +102,11 @@ jobs:
         with:
           name: workshop-package
           path: ${{ runner.temp }}/workshop-package
+      - name: Validate restart integration configuration
+        env:
+          PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
+          PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
+        run: python3 .workshop-tools/scripts/workshop/request_restart.py --validate-only
       - name: Publish existing Workshop item
         env:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
@@ -121,6 +130,11 @@ jobs:
             --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
             --env STEAM_USERNAME --env STEAM_PASSWORD --env WORKSHOP_ID --env SOURCE_SHA \
             pz-workshop-publisher
+      - name: Request server restart after successful Steam publish
+        env:
+          PZMANAGER_RESTART_URL: ${{ secrets.PZMANAGER_RESTART_URL }}
+          PZMANAGER_MOD_UPDATE_TOKEN: ${{ secrets.PZMANAGER_MOD_UPDATE_TOKEN }}
+        run: python3 .workshop-tools/scripts/workshop/request_restart.py
       - name: Remove staged files from persistent runner
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/workshop-package"
