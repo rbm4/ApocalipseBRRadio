@@ -24,7 +24,7 @@ class RestartIntegrationTests(unittest.TestCase):
             request = opener.open.call_args.args[0]
             self.assertEqual(request.get_method(), "POST")
             self.assertEqual(json.loads(request.data)["message"], "Restart para update de mods")
-            self.assertEqual(request.get_header("X-mod-update-token"), "test-token")
+            self.assertEqual(request.get_header("X-api-key"), "test-token")
 
     def test_configuration_requires_https_token_and_exact_endpoint(self):
         for url, token in [("http://example.test/api/server/mod-update/restart", "token"),

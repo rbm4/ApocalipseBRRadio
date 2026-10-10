@@ -95,8 +95,9 @@ After confirmed Steam publication, the workflow calls pzmanager's dedicated
 `POST /api/server/mod-update/restart` endpoint with the player message
 `Restart para update de mods`. Deploy the pzmanager integration endpoint first.
 Add organization secrets `PZMANAGER_RESTART_URL` (the full HTTPS endpoint URL)
-and `PZMANAGER_MOD_UPDATE_TOKEN` (a newly generated random token, also configured
-as the backend environment variable of the same name). Grant both secrets to
+and `PZMANAGER_MOD_UPDATE_TOKEN` (the full API key generated through pzmanager's
+API-key CRUD). The workflow sends it as `X-API-Key`; no backend environment token
+is needed. Revocation and the existing API rate limits apply. Grant both secrets to
 each publishing repository and explicitly pass them in reusable-workflow callers,
 alongside the Steam secrets. No integration secrets are needed by PR checks.
 

@@ -28,7 +28,7 @@ def request_restart(url, token):
     request = urllib.request.Request(
         url, method="POST",
         data=json.dumps({"message": "Restart para update de mods"}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "X-Mod-Update-Token": token},
+        headers={"Content-Type": "application/json", "X-API-Key": token},
     )
     opener = urllib.request.build_opener(NoRedirect())
     with opener.open(request, timeout=30) as response:
