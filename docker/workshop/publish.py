@@ -17,7 +17,7 @@ def quoted(value):
 
 
 def restore_config(runtime, encoded):
-    config = base64.b64decode(encoded, validate=True)
+    config = base64.b64decode(encoded.strip(), validate=True)
     if not config or len(config) > 32768:
         raise ValueError("A valid Steam login config is required")
     config_path = runtime / "config/config.vdf"

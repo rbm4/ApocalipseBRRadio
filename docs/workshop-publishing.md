@@ -126,6 +126,14 @@ real authentication/publishing check: offline CI tests mock Steam and GitHub.
 
 ## Failure handling
 
+Session preflight reports missing secrets, malformed base64 or oversized config
+separately from GitHub access failures. GitHub errors show only the operation and
+numeric HTTP status; raw CLI responses and credentials remain hidden. For 401,
+check token expiry/value; for 403, check organization Secrets permissions and
+organization approval; for 404, check the resource owner and whether the token can
+see `STEAM_CONFIG_VDF` in the configured organization. Surrounding whitespace from
+pasting the base64 secret is trimmed before validation and restoration.
+
 After confirmed Steam publication, the workflow calls pzmanager's dedicated
 `POST /api/server/mod-update/restart` endpoint with the player message
 `Restart para update de mods`. Deploy the pzmanager integration endpoint first.
