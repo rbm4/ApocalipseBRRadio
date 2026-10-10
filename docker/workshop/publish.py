@@ -156,9 +156,16 @@ def publish(package, steamcmd, username, item_id, sha):
             errors="replace", timeout=1200,
         )
         # SteamCMD can return zero even after a failed Workshop operation.
+        # Current SteamCMD confirms existing-item updates with
+        # "Committing update...Success.", without repeating the item ID.
+        # The manifest and generated VDF above already pin the target item.
+        output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout)
         success = re.search(
             r"Success\.\s+(?:Published|Updated)\s+Item\s+" + re.escape(item_id) + r"\b",
-            result.stdout, re.IGNORECASE,
+            output, re.IGNORECASE,
+        ) or re.search(
+            r"\bCommitting update\.\.\.[ \t\r\n]*Success\.[ \t]*\r?$",
+            output, re.IGNORECASE | re.MULTILINE,
         )
         if result.returncode != 0 or not success:
             print("SteamCMD did not confirm publication. " + failure_reason(result.stdout) +

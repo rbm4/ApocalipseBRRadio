@@ -174,7 +174,11 @@ Missing session secrets or unreadable secret policy fail before launching SteamC
 Saving refreshed state requires organization-secret write permission; if it fails,
 the job fails visibly but a confirmed publish still triggers the restart hook. SteamCMD has a 20-minute timeout and the publish
 job a 30-minute limit. Both its exit status and explicit successful publication of
-the expected item are required; exit zero alone is insufficient.
+the expected item are required; exit zero alone is insufficient. Current SteamCMD
+confirms existing-item updates with `Committing update...Success.` without an
+item ID in that message. The publisher accepts this commit confirmation after
+validating the target ID in the package manifest and setting it in the upload VDF;
+it also accepts the older `Success. Published Item <id>` / `Updated Item` format.
 
 Raw Steam output is not printed/uploaded because it can contain account/session
 information. Diagnose Steam login, item ownership, agreements, or connectivity
