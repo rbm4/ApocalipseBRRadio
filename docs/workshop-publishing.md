@@ -1,12 +1,12 @@
-Publishing now requires the [home WireGuard VPN setup](home-vpn-publishing.md). SteamCMD runs through your home IPv4; GitHub API and restart requests stay on the hosted runner.
-
 # Automatic Steam Workshop publishing
 
 `.github/workflows/steam-workshop.yml` packages this Build 42 mod on pull requests
 and pushes to **master**. Only a push to master or a manual dispatch on master
 publishes existing Workshop item **3706460551**, using Steam App ID **108600**.
-Both jobs use GitHub-hosted `ubuntu-latest` runners. Configure the organization
-secrets and bootstrap the Steam login below before the first publishing run.
+Packaging and PR checks use GitHub-hosted `ubuntu-latest`. The publish job uses
+a dedicated home Linux x64 runner with labels `self-hosted`, `Linux`, `X64`, and
+`pz-workshop`. Follow [home runner setup](home-publishing-runner.md), configure
+organization secrets and bootstrap Steam before the first publishing run.
 
 The shared workflow `.github/workflows/publish-workshop.yml` supports:
 
@@ -34,12 +34,11 @@ and grant **ApocalipseBRRadio** access with the selected-repositories policy:
 
 | Secret | Value and where to get it |
 | --- | --- |
-| `WORKSHOP_WIREGUARD_CONFIG` | Base64 client configuration generated on your home WSL2 host. See [home VPN setup](home-vpn-publishing.md). |
 | `STEAM_USERNAME` | The Steam **account login name** for the account that owns Workshop item 3706460551. It is not the profile/display name or SteamID. |
 | `STEAM_PASSWORD` | That account's password, used only when remembered login cannot be confirmed. Add this to enable fresh login with mobile approval. Without it, failed remembered login stops before publication. |
 | `STEAM_CONFIG_VDF` | Base64 of `config/config.vdf` from a successful interactive SteamCMD login for the same account. See bootstrap below. Contains sensitive remembered-login state. |
 | `STEAM_SESSION_GITHUB_TOKEN` | Fine-grained GitHub personal access token with resource owner **ApocalipseBr** and organization **Secrets: read and write**. Create under GitHub Settings → Developer settings → Personal access tokens → Fine-grained tokens. An organization owner must authorize/approve it as required by organization policy. It allows the workflow to preserve refreshed Steam login state. |
-| `PZMANAGER_RESTART_URL` | Full HTTPS URL ending in `/api/server/mod-update/restart`, reachable from GitHub-hosted runners. |
+| `PZMANAGER_RESTART_URL` | Full HTTPS URL ending in `/api/server/mod-update/restart`, reachable from your home runner. |
 | `PZMANAGER_MOD_UPDATE_TOKEN` | Full API key generated through pzmanager's API-key CRUD. Sent as `X-API-Key`. |
 
 The caller explicitly maps these organization secrets into the reusable workflow.
@@ -62,7 +61,7 @@ The Steam account must own the Workshop item, have the required Project Zomboid
 access, and accept Steam's Workshop agreement. GitHub repository access does not
 grant Steam item ownership.
 
-## GitHub-hosted publishing and Steam authentication
+## Home publishing and Steam authentication
 
 Valve's [Steamworks upload documentation](https://partner.steamgames.com/doc/sdk/uploading)
 under automated builds says to complete an initial login with password and Steam
@@ -87,8 +86,9 @@ config and staged content during cleanup. No login state enters artifacts or
 Actions caches; secrets are never printed or embedded in the image. Pull requests
 only run package/tests, not authentication, publishing or secret-writing steps.
 
-GitHub provides the Ubuntu worker, Docker and `gh`; no self-hosted runner or
-persistent Docker volume is required. The account must still own the Workshop
+Install Docker, Python and `gh` on the home runner. Docker uses the home
+connection directly; VPN, dynamic DNS, router forwarding and a newer Windows
+mirrored-networking version are not required. No persistent Docker volume is required. The account must still own the Workshop
 item, meet the game's requirements and have accepted the Workshop agreement.
 Steam's remembered login is not guaranteed to survive a new machine/IP, expiry or
 account security changes. The password fallback supports accounts for which
@@ -105,7 +105,7 @@ On a trusted local machine with Docker and `gh`, check out the repository and ru
 
 ```sh
 docker build -t pz-workshop-publisher docker/workshop
-docker run -it --user steam --entrypoint python3 --name pz-steam-bootstrap pz-workshop-publisher /opt/publish.py login
+docker run -it --name pz-steam-bootstrap pz-workshop-publisher login
 ```
 
 At the `Steam>` prompt enter `login YOUR_STEAM_LOGIN_NAME`, supply the password
@@ -198,7 +198,9 @@ for organization-wide serialization. Separate repositories do not share a GitHub
 concurrency lock. Organization secrets are snapshotted when a workflow is queued;
 a queued run can still receive the previous config after another run refreshes it.
 Do not run multiple publishers simultaneously against the same account/config.
-Cleanup deletes the container and exported login state on the hosted worker.
+Cleanup deletes the container and exported login state on the home runner.
+After an interrupted runner process, inspect and remove stale `pz-workshop-<run-id>-<attempt>`
+containers before rerunning. Never reset a possibly published item blindly.
 
 ## Reuse for pzstudio
 
@@ -225,7 +227,6 @@ jobs:
       build-mode: pzstudio
       project-directory: '.'
     secrets:
-      WORKSHOP_WIREGUARD_CONFIG: ${{ secrets.WORKSHOP_WIREGUARD_CONFIG }}
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
       STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
       STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
@@ -265,4 +266,4 @@ Offline regression tests cover remembered-login success, fresh-login fallback,
 missing password, approval timeout, failed-login markers and password protection.
 Tests run in CI; the first approved login and real Workshop upload still require
 an authenticated live run. Mobile approval is supported by the community approach,
-but has not yet been verified for this account on our hosted runner.
+but has not yet been verified for this account on the home runner.

@@ -21,8 +21,6 @@ on:
         default: ''
         type: string
     secrets:
-      WORKSHOP_WIREGUARD_CONFIG:
-        required: false
       STEAM_USERNAME:
         required: false
       STEAM_PASSWORD:
@@ -94,12 +92,21 @@ jobs:
     needs: package
     # Never run untrusted PR code on a publisher or expose Steam credentials to it.
     if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, pz-workshop]
     timeout-minutes: 30
+    env:
+      WORKSHOP_CONTAINER: pz-workshop-${{ github.run_id }}-${{ github.run_attempt }}
     concurrency:
       group: steam-workshop-account
       cancel-in-progress: false
     steps:
+      - name: Check home runner prerequisites
+        run: |
+          set -euo pipefail
+          command -v python3 >/dev/null || { echo "::error::Install python3 on the home runner."; exit 1; }
+          command -v gh >/dev/null || { echo "::error::Install GitHub CLI (gh) on the home runner."; exit 1; }
+          command -v docker >/dev/null || { echo "::error::Install Docker on the home runner."; exit 1; }
+          docker info >/dev/null 2>&1 || { echo "::error::Start Docker and grant the runner user access to its daemon."; exit 1; }
       - name: Check out publishing tools
         uses: actions/checkout@v4
         with:
@@ -126,7 +133,6 @@ jobs:
       - name: Publish existing Workshop item
         id: steam
         env:
-          WORKSHOP_WIREGUARD_CONFIG: ${{ secrets.WORKSHOP_WIREGUARD_CONFIG }}
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
@@ -134,16 +140,15 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_CONFIG_VDF" || -z "$WORKSHOP_WIREGUARD_CONFIG" ]]; then
-            echo "::error::Grant this repository access to STEAM_USERNAME, STEAM_CONFIG_VDF and WORKSHOP_WIREGUARD_CONFIG."
+          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_CONFIG_VDF" ]]; then
+            echo "::error::Grant this repository access to STEAM_USERNAME and STEAM_CONFIG_VDF."
             exit 1
           fi
           docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
           # Keep the stopped container until the refreshed config has been exported.
-          docker run --init --name pz-workshop-publish \
-            --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=1 \
+          docker run --init --name "$WORKSHOP_CONTAINER" \
             --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
-            --env WORKSHOP_WIREGUARD_CONFIG --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
+            --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
             pz-workshop-publisher
       - name: Preserve refreshed Steam login in organization secret
         if: always() && !cancelled() && (steps.steam.outcome == 'success' || steps.steam.outcome == 'failure')
@@ -155,11 +160,11 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p "$RUNNER_TEMP/steam-session"
-          if ! docker cp pz-workshop-publish:/home/steam/steamcmd/authenticated "$RUNNER_TEMP/steam-session/authenticated" 2>/dev/null; then
+          if ! docker cp "$WORKSHOP_CONTAINER:/home/steam/steamcmd/authenticated" "$RUNNER_TEMP/steam-session/authenticated" 2>/dev/null; then
             echo "Steam login was not confirmed; retaining the existing organization session secret."
             exit 0
           fi
-          docker cp pz-workshop-publish:/home/steam/steamcmd/config/config.vdf "$RUNNER_TEMP/steam-session/config.vdf" 2>/dev/null || {
+          docker cp "$WORKSHOP_CONTAINER:/home/steam/steamcmd/config/config.vdf" "$RUNNER_TEMP/steam-session/config.vdf" 2>/dev/null || {
             echo "::error::Steam login state could not be exported; the existing organization secret was retained."
             exit 1
           }
@@ -174,5 +179,5 @@ jobs:
       - name: Remove session data and staged files
         if: always()
         run: |
-          docker rm -f pz-workshop-publish >/dev/null 2>&1 || true
+          docker rm -f "$WORKSHOP_CONTAINER" >/dev/null 2>&1 || true
           rm -rf -- "$RUNNER_TEMP/steam-session" "$RUNNER_TEMP/workshop-package"
