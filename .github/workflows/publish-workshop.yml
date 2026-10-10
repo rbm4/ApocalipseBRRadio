@@ -12,6 +12,10 @@ on:
       project-directory:
         default: '.'
         type: string
+      test-command:
+        description: Optional test command run from project-directory; empty skips mod tests.
+        default: ''
+        type: string
     secrets:
       STEAM_USERNAME:
         required: false
@@ -39,11 +43,21 @@ jobs:
           ref: ${{ github.repository == 'ApocalipseBr/ApocalipseBRRadio' && github.sha || 'master' }}
           path: .workshop-tools
           persist-credentials: false
-      - name: Set up Node for optional pzstudio projects
-        if: inputs.build-mode == 'pzstudio'
+      - name: Set up Node for builds and optional mod tests
+        if: inputs.build-mode == 'pzstudio' || inputs.test-command != ''
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Run optional mod unit tests
+        if: inputs.test-command != ''
+        env:
+          PROJECT_DIRECTORY: ${{ inputs.project-directory }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          set -euo pipefail
+          project_dir="$(python3 .workshop-tools/scripts/workshop/stage.py resolve "$GITHUB_WORKSPACE" "$PROJECT_DIRECTORY")"
+          cd "$project_dir"
+          bash -e -o pipefail -c "$TEST_COMMAND"
       - name: Build and stage Workshop package
         env:
           BUILD_MODE: ${{ inputs.build-mode }}

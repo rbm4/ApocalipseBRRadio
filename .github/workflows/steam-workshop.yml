@@ -17,6 +17,7 @@ jobs:
       workshop-id: '3706460551'
       build-mode: ready
       project-directory: '.'
+      test-command: npm ci && npm test
     secrets:
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
       STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}

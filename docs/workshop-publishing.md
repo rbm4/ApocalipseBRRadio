@@ -110,6 +110,18 @@ Cleanup deletes the staged package but retains the authentication volume.
 
 ## Reuse for pzstudio
 
+Mod tests are optional: the reusable workflow's `test-command` input defaults
+to an empty string, which skips mod tests. Set it to the repository's test command
+(for example, `npm ci && npm test`) to run tests from `project-directory` before
+building and staging. Node 22 is available when tests are configured. The command
+must install any other required dependencies; a failure blocks packaging and
+publishing. Publisher/packaging checks always run, even for mods without tests.
+
+The radio caller enables `npm ci && npm test`. Its pinned npm dependencies run
+the music and jukebox Lua simulations through `tests/run.lua` and both language
+catalog checks through `tests/translations_spec.js`. Run the same command locally
+when needed; these simulations do not replace an in-game smoke test.
+
 A caller in another accessible repository can use:
 
 ```yaml
