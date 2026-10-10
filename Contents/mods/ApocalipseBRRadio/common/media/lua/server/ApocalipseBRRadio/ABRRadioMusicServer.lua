@@ -6,6 +6,13 @@ require "ApocalipseBRRadio/ABRRadioServer"
 ABRRadioMusicServer = { states = {}, sequence = getTimestampMs(), ready = false,
     scanIndex = 1, fastStations = 0 }
 local S, M = ABRRadioMusicServer, ABRRadio.music
+S.queues = {}
+S.notices = {}
+S.dedications = {}
+S.announcerQueues = {}
+S.MESSAGE_REPEATS = 5
+S.MAX_QUEUE = 100
+S.MAX_BATCH = 25
 S.waitTicks = M.SCAN_WAIT_TICKS
 S.LOG_INTERVAL_MS = 60000
 
@@ -78,14 +85,158 @@ end
 local function startNext(id, station, state)
     local entry
     if state.wantTalk then entry = M.pick(station.talks, state.previousTalk) end
+    local queue = S.queues[id] or {}
+    local requested = not entry and queue[1]
+    if requested then entry = M.content[requested.songId] end
     entry = entry or M.pick(station.songs, state.previousSong)
     if entry and ABRRadioServer.tryAcquireChannel(id, "music") then
+        if requested then table.remove(queue, 1) end
         state.wantTalk = false
         state.waitReason = nil
         start(station, state, entry)
     else
         state.waitReason = entry and "waiting_for_channel" or "waiting_for_songs"
     end
+end
+
+-- Validate the entire batch before changing the queue. IDs belong to the
+-- selected station; explicit requests may intentionally repeat a song.
+function S.queueSongs(stationId, songIds, playerName, message)
+    local station = M.stations[stationId]
+    if not station or not ABRRadio.isChannelEnabled(stationId) then return false, "Unknown or disabled station" end
+    if type(songIds) ~= "table" or #songIds == 0 or #songIds > S.MAX_BATCH then return false, "Invalid batch size" end
+    if type(playerName) ~= "string" or not playerName:find("%S") or #playerName > 64 then return false, "Invalid player name" end
+    if type(message) ~= "string" or #message > 240 then return false, "Invalid message" end
+    if playerName:find("[%c<>%[%]]") or message:find("[%c<>%[%]]") then return false, "Control characters or radio markup are not allowed" end
+    local queue = S.queues[stationId] or {}
+    if #queue + #songIds > S.MAX_QUEUE then return false, "Station queue is full" end
+    if S.notices[stationId] and #S.notices[stationId] >= S.MAX_QUEUE * 2 then return false, "Station announcements are full" end
+    local dedications = S.dedications[stationId] or {}
+    if message:find("%S") and #dedications >= S.MAX_QUEUE then return false, "Station messages are full" end
+    for _, songId in ipairs(songIds) do
+        local song = M.content[songId]
+        if not song or song.kind ~= "song" or song.station ~= stationId then return false, "Unknown song for station: " .. tostring(songId) end
+    end
+    S.queues[stationId] = queue
+    if message:find("%S") then
+        S.dedications[stationId] = dedications
+        local state = S.states[stationId]
+        table.insert(dedications, { playerName = playerName, message = message,
+            remaining = S.MESSAGE_REPEATS,
+            skipSequence = state and state.entry and state.entry.kind == "song" and state.sequence or nil })
+    end
+    for _, songId in ipairs(songIds) do
+        table.insert(queue, { songId = songId, playerName = playerName, message = message })
+    end
+    local function text(key, args)
+        return ABRRadio.resolveRegisteredLabel("RD_ABR_Jukebox_" .. key, args)
+    end
+    local caption = M.caption(M.content[queue[1].songId])
+    if caption == "" then caption = queue[1].songId end
+    local first = #songIds == 1 and text("Queued", { playerName, caption })
+        or text("BatchQueued", { playerName, #songIds, caption })
+    if message ~= "" then first = first .. " " .. text("Message", { playerName, message }) end
+    local notices = S.notices[stationId] or {}
+    S.notices[stationId] = notices
+    table.insert(notices, first)
+    table.insert(notices, text("Remaining", { #queue - 1 }))
+    -- Wake the bounded station scan; do not interrupt or restart current audio.
+    S.waitTicks = 0
+    return true, #queue
+end
+
+-- Announcer copy is independent of song requests and player dedications.
+-- Consume one message per song break, replacing the catalog talk segment.
+function S.queueAnnouncerMessages(stationId, messages)
+    if not M.stations[stationId] or not ABRRadio.isChannelEnabled(stationId) then
+        return false, "Unknown or disabled station"
+    end
+    if type(messages) ~= "table" or #messages == 0 or #messages > S.MAX_BATCH then
+        return false, "Invalid batch size"
+    end
+    local queue = S.announcerQueues[stationId] or {}
+    if #queue + #messages > S.MAX_QUEUE then return false, "Station announcer queue is full" end
+    for _, message in ipairs(messages) do
+        if type(message) ~= "string" or not message:find("%S") or #message > 480
+            or message:find("[%c<>%[%]]") then return false, "Invalid announcer message" end
+    end
+    S.announcerQueues[stationId] = queue
+    for _, message in ipairs(messages) do table.insert(queue, message) end
+    return true, #queue
+end
+
+local function prepareDedications(id, state)
+    state.dedicationLines = {}
+    for _, dedication in ipairs(S.dedications[id] or {}) do
+        if dedication.remaining > 0 and dedication.skipSequence ~= state.sequence then
+            table.insert(state.dedicationLines, dedication)
+        end
+    end
+    -- Hold the outgoing song's end state while these messages air, before
+    -- ordinary announcer content or the next song acquires the channel.
+    if #state.dedicationLines > 0 then
+        state.intermission = math.max(state.intermission, (#state.dedicationLines + 1) * 3)
+    end
+    local announcers = S.announcerQueues[id] or {}
+    state.announcerMessage = announcers[1]
+    if state.announcerMessage then
+        state.intermission = math.max(state.intermission, (#state.dedicationLines + 2) * 3)
+    end
+end
+
+local function broadcastDedication(id, station, state, now)
+    local lines = state.dedicationLines
+    if not lines or #lines == 0 or state.phaseElapsed < 3 then return end
+    if state.noticeAt and now - state.noticeAt < 3000 then return end
+    local radio = ABRRadio.getRadio()
+    if not radio then return end
+    local dedication = lines[1]
+    local text = ABRRadio.resolveRegisteredLabel("RD_ABR_Jukebox_Dedication",
+        { dedication.playerName, dedication.message })
+    local color = station.color
+    radio:SendTransmission(0, 0, station.frequency, text, "", "",
+        color.r, color.g, color.b, station.signalStrength, false)
+    table.remove(lines, 1)
+    dedication.remaining = dedication.remaining - 1
+    state.noticeAt = now
+    -- Leave a reading pause after the last message even after a server stall.
+    state.intermission = math.max(state.intermission, state.phaseElapsed + 3)
+    local active = S.dedications[id] or {}
+    for i = #active, 1, -1 do
+        if active[i].remaining == 0 then table.remove(active, i) end
+    end
+end
+
+local function broadcastAnnouncer(id, station, state, now)
+    if not state.announcerMessage or state.phaseElapsed < 3
+        or (state.dedicationLines and #state.dedicationLines > 0) then return end
+    if state.noticeAt and now - state.noticeAt < 3000 then return end
+    local radio = ABRRadio.getRadio()
+    if not radio then return end
+    local color = station.color
+    radio:SendTransmission(0, 0, station.frequency, state.announcerMessage, "", "",
+        color.r, color.g, color.b, station.signalStrength, false)
+    table.remove(S.announcerQueues[id], 1)
+    state.announcerMessage = nil
+    state.wantTalk = false
+    state.afterTalk = true
+    state.noticeAt = now
+    -- Leave a reading pause without registering dynamic shared catalog entries.
+    state.intermission = math.max(state.intermission, state.phaseElapsed + 3)
+end
+
+local function broadcastNotice(id, station, state, now)
+    local notices = S.notices[id]
+    if not notices or #notices == 0 then return end
+    -- Respect text ownership; ordinary music heartbeats remain independent.
+    if ABRRadioServer.channelOwners[id] ~= "music" then return end
+    if state.noticeAt and now - state.noticeAt < 3000 then return end
+    local radio = ABRRadio.getRadio()
+    if not radio then return end
+    local color = station.color
+    radio:SendTransmission(0, 0, station.frequency, table.remove(notices, 1), "", "",
+        color.r, color.g, color.b, station.signalStrength, false)
+    state.noticeAt = now
 end
 
 local function updateStation(id, station, now)
@@ -111,8 +262,12 @@ local function updateStation(id, station, now)
                     broadcast(station, state)
                 end
             elseif state.phase == "end" then
+                broadcastDedication(id, station, state, now)
+                broadcastAnnouncer(id, station, state, now)
                 -- Keep ownership through the pause so text cannot start early.
-                if state.phaseElapsed >= state.intermission then
+                if state.phaseElapsed >= state.intermission
+                    and not state.announcerMessage
+                    and (not state.dedicationLines or #state.dedicationLines == 0) then
                     state.entry = nil
                     ABRRadioServer.releaseChannel(id, "music")
                     startNext(id, station, state)
@@ -134,6 +289,7 @@ local function updateStation(id, station, now)
                     state.wantTalk = state.entry.kind == "song" and #station.talks > 0
                     if state.entry.kind == "song" then
                         state.intermission = state.wantTalk and 0 or ZombRand(M.INTERMISSION_MIN, M.INTERMISSION_MAX + 1)
+                        prepareDedications(id, state)
                         if state.intermission == 0 then
                             state.entry = nil
                             ABRRadioServer.releaseChannel(id, "music")
@@ -164,12 +320,16 @@ local function updateStation(id, station, now)
             broadcast(station, state)
         end
         state.entry = nil
+        state.dedicationLines = nil
+        state.announcerMessage = nil
         state.wantTalk = false
         ABRRadioServer.releaseChannel(id, "music")
     end
+    broadcastNotice(id, station, state, now)
     -- Keep the one-station-per-tick budget, but avoid the 50-tick sleep while
     -- announcing, ending a pause, or delivering short timed announcer lines.
-    local fast = state.entry ~= nil and (state.entry.kind == "talk" or state.phase ~= "play"
+    local fast = state.entry ~= nil and ((S.notices[id] and #S.notices[id] > 0)
+        or state.entry.kind == "talk" or state.phase ~= "play"
         or state.entry.duration - state.elapsed <= M.HEARTBEAT + M.TRANSITION_LEAD_SECONDS)
     if fast ~= (state.fast == true) then
         S.fastStations = S.fastStations + (fast and 1 or -1)

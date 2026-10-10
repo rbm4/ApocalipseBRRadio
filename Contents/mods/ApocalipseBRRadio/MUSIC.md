@@ -1,5 +1,86 @@
 # Music contract (framework v2.3.0)
 
+## RCON jukebox
+
+Enable `ApocalipseBrRCONextension` on server and clients to receive requests.
+The radio subscribes to `Jukebox.Queue` using the same extension API as the
+Furniture and Animals mods. The transport is optional; ordinary radio playback
+still works without the extension. Its client relay requires a connected client.
+
+```text
+servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-001##my_music##Alice##mypack_song01##This one is for the survivors!
+servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-002##my_music##Alice##mypack_song01,mypack_song02##Enjoy the playlist!
+```
+
+Payload: `stationId##playerName##songId[,songId...]##message`. Use catalog IDs,
+not titles or sound paths. Message may be empty (keep the final separator), and
+may contain `##`; station and player names cannot contain the separator. Player
+name is the supplied attribution, and need not be online. Use a new request ID
+for each request; the extension suppresses duplicate relays for one hour.
+
+Requests append atomically to a FIFO queue per enabled station: up to 25 songs
+per command and 100 pending songs per station. Unknown songs, songs from another
+station, malformed lists, oversized names/messages, control characters, and radio
+markup are rejected with a server log. Names are limited to 64 bytes and messages
+to 240 bytes. Repeated songs are allowed. Queues are held in memory and reset
+on restart. Current music and normal announcer segments finish; requests replace
+random song selection until the queue drains. Channel arbitration still applies,
+and a request is removed only after music acquires the channel.
+
+Each command produces two radio lines: a compact request/batch announcement with
+the next queued song and optional player message, then the number of songs queued
+after that song. A batch does not announce every title. Counts are snapshots at
+acceptance, excluding the currently airing song. Lines are spaced by at least
+three real seconds and sent on music-owned station checks; they wait while text
+owns the channel. Playback heartbeats remain independent. The copy uses
+`RD_ABR_Jukebox_*_{EN,PTBR}` in both RadioData dictionaries and the server's
+broadcast language option.
+
+An empty message queues songs without storing a listener message. Each non-empty
+command stores its player attribution and message once, even for a song list.
+In addition to the initial request announcement, the station repeats that message
+after each of the next five songs, using the translated listener-message
+introduction `RD_ABR_Jukebox_Dedication_{EN,PTBR}`. A song already airing when the
+command arrives does not count. Ordinary announcer segments do not count either.
+All active messages air once per eligible song break, at least three seconds
+apart, before the normal announcer or next song; the end pause extends as needed.
+Each message expires after five successful repeat broadcasts. Messages remain
+station-specific, reset on restart, and are capped at 100 active messages per
+station. Failed commands store nothing.
+
+## External announcer message queue
+
+AI agents and other external tools can supply a separate FIFO of radio voice
+messages, without a player name or song requests:
+
+```text
+servermsg ##APOCBR_RCON##Radio##QueueAnnouncer##unique-voice-001##my_music##Good evening, survivors.##Keep your radios tuned for more music.
+```
+
+Payload: `stationId##message1[##message2...]`. Each message is one future
+between-song broadcast; sequence order is preserved across commands. Commas and
+pipes are literal text; `##` is reserved as the message separator. This hook is
+`Radio.QueueAnnouncer`, distinct from `Jukebox.Queue`. The server Lua API is
+`ABRRadioMusicServer.queueAnnouncerMessages(stationId, messages)`.
+
+At each song completion, one pending announcer message replaces the station's
+normal catalog talk segment. Active player dedications still air first, once per
+eligible break under their five-repeat lifecycle. Announcer messages play once,
+have no player attribution, and never enter the song, request-announcement, or
+dedication queues. The next song waits until the messages and their reading pause
+finish; existing music end heartbeats continue. Without queued announcer copy,
+the normal catalog talk resumes. Stations without catalog talk can also use this
+queue. Commands received after a break begins apply at the next song completion.
+
+Up to 25 messages per command, 100 pending per station, and 480 UTF-8 bytes per
+message are accepted. Validation rejects the whole batch if any message is empty,
+too long, contains control characters/radio markup, or targets an unknown/disabled
+station. Messages are removed only after the radio transmission succeeds and
+remain queued if the channel is busy or the radio is unavailable. Queues reset
+on restart. Copy is broadcast verbatim in the language supplied by the agent;
+it is dynamic content, not a built-in translation label. No audio/TTS is generated
+by this hook.
+
 ApocalipseBRRadio owns the shared music registry/protocol, real-time server
 scheduler, client audio, and channel arbitration. Content packs supply
 stations, songs, timed talk, sound definitions, and audio assets. The framework
