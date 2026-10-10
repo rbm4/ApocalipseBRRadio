@@ -21,6 +21,8 @@ on:
         default: ''
         type: string
     secrets:
+      WORKSHOP_WIREGUARD_CONFIG:
+        required: false
       STEAM_USERNAME:
         required: false
       STEAM_PASSWORD:
@@ -124,6 +126,7 @@ jobs:
       - name: Publish existing Workshop item
         id: steam
         env:
+          WORKSHOP_WIREGUARD_CONFIG: ${{ secrets.WORKSHOP_WIREGUARD_CONFIG }}
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
@@ -131,15 +134,16 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_CONFIG_VDF" ]]; then
-            echo "::error::Grant this repository access to STEAM_USERNAME and STEAM_CONFIG_VDF."
+          if [[ -z "$STEAM_USERNAME" || -z "$STEAM_CONFIG_VDF" || -z "$WORKSHOP_WIREGUARD_CONFIG" ]]; then
+            echo "::error::Grant this repository access to STEAM_USERNAME, STEAM_CONFIG_VDF and WORKSHOP_WIREGUARD_CONFIG."
             exit 1
           fi
           docker build -t pz-workshop-publisher .workshop-tools/docker/workshop
           # Keep the stopped container until the refreshed config has been exported.
           docker run --init --name pz-workshop-publish \
+            --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=1 \
             --mount "type=bind,src=$RUNNER_TEMP/workshop-package,dst=/package,readonly" \
-            --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
+            --env WORKSHOP_WIREGUARD_CONFIG --env STEAM_USERNAME --env STEAM_PASSWORD --env STEAM_CONFIG_VDF --env WORKSHOP_ID --env SOURCE_SHA \
             pz-workshop-publisher
       - name: Preserve refreshed Steam login in organization secret
         if: always() && !cancelled() && (steps.steam.outcome == 'success' || steps.steam.outcome == 'failure')
