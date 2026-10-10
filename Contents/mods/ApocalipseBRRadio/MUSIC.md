@@ -4,8 +4,9 @@
 
 Enable `ApocalipseBrRCONextension` on server and clients to receive requests.
 The radio subscribes to `Jukebox.Queue` using the same extension API as the
-Furniture and Animals mods. The transport is optional; ordinary radio playback
-still works without the extension. Its client relay requires a connected client.
+Furniture and Animals mods. The mod metadata requires `ApocalipseBrRCONextension` on server and clients.
+The integration code still handles an unavailable transport gracefully. Its
+client relay requires a connected client.
 
 ```text
 servermsg ##APOCBR_RCON##Jukebox##Queue##unique-request-001##my_music##Alice##mypack_song01##This one is for the survivors!
