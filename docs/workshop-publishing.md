@@ -165,6 +165,13 @@ through a trusted local interactive container when publishing fails. A Workshop 
 an external side effect: inspect the changenote before retrying an uncertain run.
 There is no automatic rollback.
 
+Publication failures classify known Steam messages into Guard, rejected login,
+account/game/item access, agreement or connectivity failures and report the
+SteamCMD exit status. Unknown output remains generic. These classifications help
+diagnose errors without printing Steam's raw output. A successful session-secret
+save only means the config file was copied; it does not prove authentication or
+publication succeeded.
+
 Publishing jobs share an account concurrency group without cancelling active
 uploads. GitHub concurrency is per repository and not FIFO; pending commits can
 be superseded by later pushes. When reusing one account across repositories,

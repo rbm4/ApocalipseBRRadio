@@ -26,6 +26,21 @@ def restore_config(runtime, encoded):
     config_path.chmod(0o600)
 
 
+def failure_reason(output):
+    # Classify known messages; never print raw Steam output or account details.
+    if re.search(r"Steam Guard|two[- ]?factor|AccountLogonDenied|authenticator code|InvalidLoginAuthCode", output, re.I):
+        return "Steam requested or rejected Steam Guard authentication."
+    if re.search(r"Invalid Password|InvalidPassword|Invalid Login|InvalidLogin", output, re.I):
+        return "Steam rejected the login credentials or remembered session."
+    if re.search(r"Access Denied|AccessDenied|InsufficientPrivilege|does not own|No subscription", output, re.I):
+        return "Steam denied account access to the game or Workshop item."
+    if re.search(r"LegalAgreement|legal agreement|Workshop agreement", output, re.I):
+        return "Steam requires acceptance of the Workshop agreement."
+    if re.search(r"No Connection|NoConnection|ConnectFailed|connection.*failed|timed out", output, re.I):
+        return "Steam reported a connection failure."
+    return "Steam returned an unrecognized failure or did not confirm the target Workshop item."
+
+
 def main():
     # SteamCMD stores config/ssfn state beside its executable, not only in ~/.steam.
     runtime = Path.home() / "steamcmd"
@@ -87,9 +102,9 @@ def publish(package, steamcmd, username, item_id, sha):
             result.stdout, re.IGNORECASE,
         )
         if result.returncode != 0 or not success:
-            print("SteamCMD did not confirm publication. Check item ownership/game access, "
-                  "Steam Guard session, accepted Workshop terms, and Steam connectivity. "
-                  "Refresh STEAM_CONFIG_VDF with an interactive login if Steam requests authentication.", file=sys.stderr)
+            print("SteamCMD did not confirm publication. " + failure_reason(result.stdout) +
+                  " SteamCMD exit status: " + str(result.returncode) +
+                  ". Raw Steam output remains hidden.", file=sys.stderr)
             return 1
         print("Published Workshop item " + item_id + " from commit " + sha)
         return 0
