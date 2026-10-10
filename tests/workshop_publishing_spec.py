@@ -118,6 +118,17 @@ class WorkshopTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 publisher.quoted(value)
 
+    def test_steam_failure_diagnostics_classify_without_exposing_account_data(self):
+        for output, reason in [
+            ("private-account: Steam Guard code required", "Steam requested or rejected Steam Guard authentication."),
+            ("private-account: FAILED (Invalid Password)", "Steam rejected the login credentials or remembered session."),
+            ("private-account: Access Denied", "Steam denied account access to the game or Workshop item."),
+            ("private-account: LegalAgreement", "Steam requires acceptance of the Workshop agreement."),
+            ("private-account: FAILED (No Connection)", "Steam reported a connection failure."),
+        ]:
+            self.assertEqual(reason, publisher.failure_reason(output))
+            self.assertNotIn("private-account", publisher.failure_reason(output))
+
 
 if __name__ == "__main__":
     unittest.main()
